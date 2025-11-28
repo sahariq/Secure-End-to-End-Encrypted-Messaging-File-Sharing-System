@@ -1,7 +1,15 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
-import { loadKeyPair, generateECCKeyPair, saveKeyPair, exportPublicKeyAsJWKString } from '../crypto/keyManager';
+import { 
+  loadKeyPair, 
+  generateECCKeyPair, 
+  saveKeyPair, 
+  exportPublicKeyAsJWKString,
+  loadSigningKeyPair,
+  generateSigningKeyPair,
+  saveSigningKeyPair
+} from '../crypto/keyManager';
 import './LoginPage.css';
 
 // Use direct axios for login (no token needed yet)
@@ -38,8 +46,9 @@ function LoginPage() {
         
         try {
           const keyPair = await loadKeyPair();
+          const signingKeyPair = await loadSigningKeyPair();
           
-          if (keyPair) {
+          if (keyPair && signingKeyPair) {
             // Keys found, load successful
             setKeyStatus('Keys loaded successfully.');
             console.log('Loaded existing ECC key pair');
@@ -53,14 +62,19 @@ function LoginPage() {
               navigate('/chat');
             }, 500);
           } else {
-            // No keys found, generate new pair
+            // No keys found, generate new pairs
             setKeyStatus('No keys found, generating fresh ones...');
             
+            // Generate ECDH key pair for key exchange
             const { privateKey, publicKey } = await generateECCKeyPair();
             await saveKeyPair(privateKey, publicKey);
             
+            // Generate ECDSA key pair for signing
+            const signingKeys = await generateSigningKeyPair();
+            await saveSigningKeyPair(signingKeys.privateKey, signingKeys.publicKey);
+            
             const publicKeyJWK = await exportPublicKeyAsJWKString();
-            console.log('Generated new ECC key pair');
+            console.log('Generated new ECC key pairs (ECDH + ECDSA)');
             console.log('Public Key (JWK):', publicKeyJWK);
             
             setKeyStatus('Keys generated successfully!');

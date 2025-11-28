@@ -16,19 +16,17 @@ import { exportPublicKeyToJWK, jwkToString } from './keyUtils.js';
 
 const PRIVATE_KEY_NAME = 'ecc_private_key';
 const PUBLIC_KEY_NAME = 'ecc_public_key';
+const SIGNING_PRIVATE_KEY_NAME = 'ecdsa_private_key';
+const SIGNING_PUBLIC_KEY_NAME = 'ecdsa_public_key';
 
 /**
- * Generate a new ECC P-256 key pair
+ * Generate a new ECC P-256 key pair for ECDH (key exchange)
  * 
  * Key specifications:
  * - Algorithm: ECDH (Elliptic Curve Diffie-Hellman)
  * - Curve: P-256 (prime256v1)
  * - Private key: NEVER exported (security requirement)
  * - Public key: extractable = true (for export and sharing)
- * 
- * NOTE: Web Crypto API limitation: Both keys in a pair must have the same extractable property.
- * We generate with extractable=true to allow public key export. The private key is never
- * exported (security by policy), even though it's technically extractable.
  * 
  * @returns {Promise<{privateKey: CryptoKey, publicKey: CryptoKey}>} The generated key pair
  */
@@ -39,12 +37,7 @@ export const generateECCKeyPair = async () => {
       throw new Error('Web Crypto API is not available in this browser');
     }
 
-    // Generate ECC P-256 key pair
-    // NOTE: Web Crypto API limitation: Both keys in a pair must have the same extractable property.
-    // We generate with extractable=true to allow public key export. Security is maintained by:
-    // 1. NEVER calling exportKey on the private key (security by policy)
-    // 2. Storing private key securely in IndexedDB
-    // 3. Only using private key for key derivation operations
+    // Generate ECC P-256 key pair for ECDH
     const keyPair = await window.crypto.subtle.generateKey(
       {
         name: 'ECDH',
@@ -54,17 +47,47 @@ export const generateECCKeyPair = async () => {
       ['deriveKey', 'deriveBits'] // Usage for ECDH key derivation
     );
 
-    // IMPORTANT: The private key is extractable=true due to API limitations,
-    // but we NEVER export it. Security is maintained by:
-    // 1. Never calling exportKey on the private key
-    // 2. Storing it securely in IndexedDB
-    // 3. Only using it for key derivation operations
     return {
-      privateKey: keyPair.privateKey, // Stored securely, never exported
-      publicKey: keyPair.publicKey // Extractable, can be exported as JWK for sharing
+      privateKey: keyPair.privateKey,
+      publicKey: keyPair.publicKey
     };
   } catch (error) {
     throw new Error(`Failed to generate ECC key pair: ${error.message}`);
+  }
+};
+
+/**
+ * Generate a new ECC P-256 key pair for ECDSA (signing)
+ * 
+ * Key specifications:
+ * - Algorithm: ECDSA (Elliptic Curve Digital Signature Algorithm)
+ * - Curve: P-256 (prime256v1)
+ * - Used for: Signing ECDH public keys during key exchange
+ * 
+ * @returns {Promise<{privateKey: CryptoKey, publicKey: CryptoKey}>} The generated signing key pair
+ */
+export const generateSigningKeyPair = async () => {
+  try {
+    if (!window.crypto || !window.crypto.subtle) {
+      throw new Error('Web Crypto API is not available in this browser');
+    }
+
+    // Generate ECC P-256 key pair for ECDSA signing
+    const keyPair = await window.crypto.subtle.generateKey(
+      {
+        name: 'ECDSA',
+        namedCurve: 'P-256'
+      },
+      true, // Both keys extractable
+      ['sign', 'verify'] // Usage for digital signatures
+    );
+
+    return {
+      privateKey: keyPair.privateKey,
+      publicKey: keyPair.publicKey
+    };
+  } catch (error) {
+    throw new Error(`Failed to generate signing key pair: ${error.message}`);
   }
 };
 
@@ -94,6 +117,26 @@ export const saveKeyPair = async (privateKey, publicKey) => {
 };
 
 /**
+ * Save signing key pair to IndexedDB
+ * 
+ * @param {CryptoKey} privateKey - The signing private key
+ * @param {CryptoKey} publicKey - The signing public key  
+ * @returns {Promise<void>}
+ */
+export const saveSigningKeyPair = async (privateKey, publicKey) => {
+  try {
+    if (!(privateKey instanceof CryptoKey) || !(publicKey instanceof CryptoKey)) {
+      throw new Error('Both keys must be CryptoKey objects');
+    }
+
+    await saveKey(SIGNING_PRIVATE_KEY_NAME, privateKey);
+    await saveKey(SIGNING_PUBLIC_KEY_NAME, publicKey);
+  } catch (error) {
+    throw new Error(`Failed to save signing key pair: ${error.message}`);
+  }
+};
+
+/**
  * Load a key pair from IndexedDB
  * 
  * @returns {Promise<{privateKey: CryptoKey, publicKey: CryptoKey}|null>}
@@ -114,6 +157,29 @@ export const loadKeyPair = async () => {
     };
   } catch (error) {
     throw new Error(`Failed to load key pair: ${error.message}`);
+  }
+};
+
+/**
+ * Load signing key pair from IndexedDB
+ * 
+ * @returns {Promise<{privateKey: CryptoKey, publicKey: CryptoKey}|null>}
+ */
+export const loadSigningKeyPair = async () => {
+  try {
+    const privateKey = await getKey(SIGNING_PRIVATE_KEY_NAME);
+    const publicKey = await getKey(SIGNING_PUBLIC_KEY_NAME);
+
+    if (!privateKey || !publicKey) {
+      return null;
+    }
+
+    return {
+      privateKey,
+      publicKey
+    };
+  } catch (error) {
+    throw new Error(`Failed to load signing key pair: ${error.message}`);
   }
 };
 

@@ -68,7 +68,7 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
-import { loadKeyPair } from './keyManager.js';
+import { loadKeyPair, loadSigningKeyPair } from './keyManager.js';
 import { signMessage, verifySignature, signatureToBase64, base64ToSignature } from './signing.js';
 import { saveSessionKey, getSessionKey } from './sessionStore.js';
 import apiClient from '../utils/api.js';
@@ -281,11 +281,12 @@ export const initiateKeyExchange = async (peerUserId) => {
     console.log('═══════════════════════════════════════════════════════');
     console.log(`Peer User ID: ${peerUserId}\n`);
 
-    // STEP 1: Load my identity key pair
-    console.log('[1/6] Loading identity key pair...');
+    // STEP 1: Load identity key pairs (ECDH for key exchange, ECDSA for signing)
+    console.log('[1/6] Loading identity key pairs...');
     const myIdentityKeys = await loadKeyPair();
-    if (!myIdentityKeys) {
-      throw new Error('No identity key pair found. Please log in or register.');
+    const mySigningKeys = await loadSigningKeyPair();
+    if (!myIdentityKeys || !mySigningKeys) {
+      throw new Error('No identity key pairs found. Please log in or register.');
     }
 
     // STEP 2: Generate ephemeral ECDH key pair
@@ -299,25 +300,11 @@ export const initiateKeyExchange = async (peerUserId) => {
       ephemeralKeyPair.publicKey
     );
 
-    // STEP 4: Sign ephemeral public key with identity private key
+    // STEP 4: Sign ephemeral public key with identity signing private key
     console.log('[4/6] Signing ephemeral public key...');
     const ephemeralPubKeyString = JSON.stringify(ephemeralPublicKeyJwk);
     
-    // Convert identity key to ECDSA for signing (if needed)
-    // Re-import the private key with correct algorithm for signing
-    const identityPrivateKeyJwk = await window.crypto.subtle.exportKey('jwk', myIdentityKeys.privateKey);
-    const signingKey = await window.crypto.subtle.importKey(
-      'jwk',
-      identityPrivateKeyJwk,
-      {
-        name: 'ECDSA',
-        namedCurve: 'P-256'
-      },
-      false,
-      ['sign']
-    );
-    
-    const signature = await signMessage(signingKey, ephemeralPubKeyString);
+    const signature = await signMessage(mySigningKeys.privateKey, ephemeralPubKeyString);
     const signatureBase64 = signatureToBase64(signature);
 
     // STEP 5: Retrieve peer's identity public key
@@ -422,27 +409,14 @@ export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJw
 
     // STEP 8: Sign my ephemeral public key and send response
     console.log('[8/8] Signing my ephemeral public key...');
-    const myIdentityKeys = await loadKeyPair();
+    const mySigningKeys = await loadSigningKeyPair();
     const myEphemeralPublicKeyJwk = await window.crypto.subtle.exportKey(
       'jwk',
       myEphemeralKeyPair.publicKey
     );
     const myEphemeralPubKeyString = JSON.stringify(myEphemeralPublicKeyJwk);
     
-    // Convert identity key to ECDSA for signing
-    const identityPrivateKeyJwk = await window.crypto.subtle.exportKey('jwk', myIdentityKeys.privateKey);
-    const signingKey = await window.crypto.subtle.importKey(
-      'jwk',
-      identityPrivateKeyJwk,
-      {
-        name: 'ECDSA',
-        namedCurve: 'P-256'
-      },
-      false,
-      ['sign']
-    );
-    
-    const mySignature = await signMessage(signingKey, myEphemeralPubKeyString);
+    const mySignature = await signMessage(mySigningKeys.privateKey, myEphemeralPubKeyString);
     const mySignatureBase64 = signatureToBase64(mySignature);
 
     console.log('\n✓ Key exchange response complete!');
