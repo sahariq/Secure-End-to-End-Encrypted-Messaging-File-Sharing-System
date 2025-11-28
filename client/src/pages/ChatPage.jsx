@@ -6,9 +6,9 @@ import {
   respondToKeyExchange, 
   completeKeyExchange,
   uploadMyPublicKey,
-  hasSessionKeyWithPeer,
-  getSessionKey
+  hasSessionKeyWithPeer
 } from '../crypto/keyExchange';
+import { getSessionKey } from '../crypto/sessionStore';
 import { loadKeyPair, exportPublicKeyAsJWKString } from '../crypto/keyManager';
 import { encryptMessage, decryptMessage } from '../crypto/encryption';
 import './ChatPage.css';

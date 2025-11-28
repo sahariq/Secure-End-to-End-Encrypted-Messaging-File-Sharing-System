@@ -71,7 +71,7 @@
 import { loadKeyPair } from './keyManager.js';
 import { signMessage, verifySignature, signatureToBase64, base64ToSignature } from './signing.js';
 import { saveSessionKey, getSessionKey } from './sessionStore.js';
-import { api } from '../utils/api.js';
+import apiClient from '../utils/api.js';
 
 /**
  * Upload current user's identity public key to server
@@ -89,7 +89,7 @@ export const uploadMyPublicKey = async (userId, publicKeyJwk) => {
       throw new Error('User ID and public key are required');
     }
 
-    const response = await api.post('/keys/upload', {
+    const response = await apiClient.post('/keys/upload', {
       userId,
       publicKeyJwk
     });
@@ -113,7 +113,7 @@ export const requestPublicKeyFromServer = async (userId) => {
       throw new Error('User ID is required');
     }
 
-    const response = await api.get(`/keys/${userId}`);
+    const response = await apiClient.get(`/keys/${userId}`);
     
     if (!response.data || !response.data.publicKeyJwk) {
       throw new Error('Peer has not uploaded their public key yet');

@@ -26,8 +26,7 @@ const publicKeySchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
-    unique: true, // One public key per user
-    index: true // Fast lookups by userId
+    unique: true // One public key per user (unique constraint also creates an index)
   },
   publicKeyJwk: {
     type: String,
@@ -60,8 +59,8 @@ publicKeySchema.pre('save', function(next) {
   next();
 });
 
-// Index for efficient queries
-publicKeySchema.index({ userId: 1 });
+// Note: userId already has a unique index from the schema definition above
+// No need for a separate index declaration here
 
 const PublicKey = mongoose.model('PublicKey', publicKeySchema);
 
