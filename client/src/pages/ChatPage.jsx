@@ -9,7 +9,7 @@ import {
   hasSessionKeyWithPeer
 } from '../crypto/keyExchange';
 import { getSessionKey } from '../crypto/sessionStore';
-import { loadKeyPair, exportPublicKeyAsJWKString } from '../crypto/keyManager';
+import { loadKeyPair, loadSigningKeyPair, exportPublicKeyAsJWKString } from '../crypto/keyManager';
 import { encryptMessage, decryptMessage } from '../crypto/encryption';
 import './ChatPage.css';
 
@@ -202,17 +202,18 @@ function ChatPage() {
       setKeyExchangeStatus('Uploading public key...');
       setError('');
 
-      // Load key pair from IndexedDB
-      const keyPair = await loadKeyPair();
-      if (!keyPair) {
-        throw new Error('No key pair found. Please log in again.');
+      // Load ECDSA signing key pair from IndexedDB (used for verifying signatures)
+      const signingKeyPair = await loadSigningKeyPair();
+      if (!signingKeyPair) {
+        throw new Error('No signing key pair found. Please log in again.');
       }
 
-      // Export public key as JWK string
-      const publicKeyJwk = await exportPublicKeyAsJWKString();
+      // Export ECDSA public key as JWK
+      const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', signingKeyPair.publicKey);
+      const publicKeyJwkString = JSON.stringify(publicKeyJwk);
 
       // Upload to server
-      await uploadMyPublicKey(currentUserId, publicKeyJwk);
+      await uploadMyPublicKey(currentUserId, publicKeyJwkString);
 
       setKeyExchangeStatus('✓ Public key uploaded successfully!');
       console.log('✓ Public key uploaded to server');
