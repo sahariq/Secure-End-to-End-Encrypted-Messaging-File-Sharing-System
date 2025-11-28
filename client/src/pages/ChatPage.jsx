@@ -59,6 +59,13 @@ function ChatPage() {
       loadMessages();
       checkSessionKeyStatus();
     }
+    
+    // Cleanup polling interval on unmount
+    return () => {
+      if (window.keyExchangePollInterval) {
+        clearInterval(window.keyExchangePollInterval);
+      }
+    };
   }, [selectedContact, currentUserId]);
 
   const checkSessionKeyStatus = async () => {
@@ -313,34 +320,46 @@ function ChatPage() {
       const conversationKey = `key_exchange_${currentUserId}_to_${selectedContact._id}`;
       localStorage.setItem(conversationKey, JSON.stringify(myExchangeData));
 
-      // STEP 6: Try to retrieve peer's exchange data
+      // STEP 6: Check if peer's exchange data already exists
       console.log('[6/6] Checking for peer\'s exchange data...');
       const peerConversationKey = `key_exchange_${selectedContact._id}_to_${currentUserId}`;
       const peerExchangeDataStr = localStorage.getItem(peerConversationKey);
 
-      if (!peerExchangeDataStr) {
-        // Peer hasn't initiated yet - wait for them
-        setKeyExchangeStatus('⏳ Waiting for peer to accept key exchange...');
-        console.log('\n⏳ Waiting for peer to initiate their side...');
-        console.log('💡 Have the other user (in another tab) select you and click "Start Key Exchange"');
-        
-        // Poll for peer's data
-        const pollInterval = setInterval(async () => {
-          const peerData = localStorage.getItem(peerConversationKey);
-          if (peerData) {
-            clearInterval(pollInterval);
-            await completeDerivedKey(JSON.parse(peerData), ephemeralKeyPair, peerIdentityPublicKey);
-          }
-        }, 1000);
-        
-        // Clean up after 60 seconds
-        setTimeout(() => clearInterval(pollInterval), 60000);
+      if (peerExchangeDataStr) {
+        // Peer's data exists - complete immediately
+        console.log('✓ Peer\'s exchange data found! Completing exchange...');
+        const peerExchangeData = JSON.parse(peerExchangeDataStr);
+        await completeDerivedKey(peerExchangeData, ephemeralKeyPair, peerIdentityPublicKey);
         return;
       }
 
-      // Peer's data exists - complete the exchange
-      const peerExchangeData = JSON.parse(peerExchangeDataStr);
-      await completeDerivedKey(peerExchangeData, ephemeralKeyPair, peerIdentityPublicKey);
+      // Peer hasn't initiated yet - poll for their data
+      setKeyExchangeStatus('⏳ Waiting for peer to accept key exchange...');
+      console.log('\n⏳ Waiting for peer to initiate their side...');
+      console.log('💡 Have the other user (in another tab) select you and click "Start Key Exchange"');
+      
+      // Aggressive polling every 500ms
+      let attempts = 0;
+      const maxAttempts = 120; // 60 seconds total
+      
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        const peerData = localStorage.getItem(peerConversationKey);
+        
+        if (peerData) {
+          clearInterval(pollInterval);
+          console.log('✓ Peer\'s exchange data received!');
+          const peerExchangeData = JSON.parse(peerData);
+          await completeDerivedKey(peerExchangeData, ephemeralKeyPair, peerIdentityPublicKey);
+        } else if (attempts >= maxAttempts) {
+          clearInterval(pollInterval);
+          setKeyExchangeStatus('⏱️ Key exchange timed out. Try again.');
+          setError('Peer did not respond to key exchange');
+        }
+      }, 500);
+      
+      // Store interval ID for cleanup
+      window.keyExchangePollInterval = pollInterval;
 
     } catch (err) {
       console.error('❌ Key exchange failed:', err);
