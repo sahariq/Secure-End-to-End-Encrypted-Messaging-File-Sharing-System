@@ -1,16 +1,20 @@
 /**
  * Secure IndexedDB Wrapper for Cryptographic Keys
  * 
- * STEP 3: IndexedDB-based storage for CryptoKey objects
+ * STEP 3 & 4: IndexedDB-based storage for CryptoKey objects
  * 
- * Provides secure storage for cryptographic keys using IndexedDB,
- * which offers better security isolation than localStorage and
- * can store structured objects like CryptoKey directly.
+ * Provides secure storage for:
+ * - Identity key pairs (STEP 3)
+ * - Session keys (STEP 4)
+ * 
+ * Uses IndexedDB which offers better security isolation than localStorage
+ * and can store structured objects like CryptoKey directly.
  */
 
 const DB_NAME = 'secureKeysDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Version 2: Added sessionKeys store
 const STORE_NAME = 'keys';
+const SESSION_STORE_NAME = 'sessionKeys';
 
 /**
  * Open or create the IndexedDB database
@@ -31,11 +35,18 @@ export const openDB = () => {
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
       
-      // Create object store if it doesn't exist
+      // Create keys store if it doesn't exist (STEP 3 - Identity keys)
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         const objectStore = db.createObjectStore(STORE_NAME, { keyPath: 'name' });
         // Create index for faster lookups if needed
         objectStore.createIndex('name', 'name', { unique: true });
+      }
+
+      // Create session keys store if it doesn't exist (STEP 4 - Session keys)
+      if (!db.objectStoreNames.contains(SESSION_STORE_NAME)) {
+        const sessionStore = db.createObjectStore(SESSION_STORE_NAME, { keyPath: 'peerId' });
+        // Index by peer user ID for fast lookups
+        sessionStore.createIndex('peerId', 'peerId', { unique: true });
       }
     };
   });

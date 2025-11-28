@@ -18,43 +18,6 @@
 import { openDB } from './indexedDB.js';
 
 const SESSION_STORE_NAME = 'sessionKeys';
-const DB_NAME = 'secureKeysDB';
-const DB_VERSION = 2; // Increment version to add new object store
-
-/**
- * Open or create the IndexedDB database with session keys store
- * @returns {Promise<IDBDatabase>} The database instance
- */
-export const openSessionDB = () => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onerror = () => {
-      reject(new Error(`Failed to open database: ${request.error}`));
-    };
-
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      
-      // Create keys store if it doesn't exist (from STEP 3)
-      if (!db.objectStoreNames.contains('keys')) {
-        const keysStore = db.createObjectStore('keys', { keyPath: 'name' });
-        keysStore.createIndex('name', 'name', { unique: true });
-      }
-
-      // Create session keys store if it doesn't exist
-      if (!db.objectStoreNames.contains(SESSION_STORE_NAME)) {
-        const sessionStore = db.createObjectStore(SESSION_STORE_NAME, { keyPath: 'peerId' });
-        // Index by peer user ID for fast lookups
-        sessionStore.createIndex('peerId', 'peerId', { unique: true });
-      }
-    };
-  });
-};
 
 /**
  * Save a session key for a specific peer
@@ -73,7 +36,7 @@ export const saveSessionKey = async (peerId, sessionKey) => {
       throw new Error('Session key must be a CryptoKey object');
     }
 
-    const db = await openSessionDB();
+    const db = await openDB();
     
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([SESSION_STORE_NAME], 'readwrite');
@@ -121,7 +84,7 @@ export const getSessionKey = async (peerId) => {
       throw new Error('Peer ID is required');
     }
 
-    const db = await openSessionDB();
+    const db = await openDB();
     
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([SESSION_STORE_NAME], 'readonly');
@@ -167,7 +130,7 @@ export const deleteSessionKey = async (peerId) => {
       throw new Error('Peer ID is required');
     }
 
-    const db = await openSessionDB();
+    const db = await openDB();
     
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([SESSION_STORE_NAME], 'readwrite');
@@ -202,7 +165,7 @@ export const deleteSessionKey = async (peerId) => {
  */
 export const clearAllSessionKeys = async () => {
   try {
-    const db = await openSessionDB();
+    const db = await openDB();
     
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([SESSION_STORE_NAME], 'readwrite');
