@@ -91,11 +91,71 @@
   padding: 1rem;
   border-bottom: 1px solid #ddd;
   background-color: #f9f9f9;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .chat-header-bar h3 {
   margin: 0;
   color: #333;
+}
+
+.key-exchange-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.key-exchange-btn {
+  padding: 0.5rem 1rem;
+  background-color: #667eea;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s;
+  white-space: nowrap;
+}
+
+.key-exchange-btn:hover:not(:disabled) {
+  background-color: #5568d3;
+}
+
+.key-exchange-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.session-key-indicator {
+  padding: 0.5rem 1rem;
+  background-color: #27ae60;
+  color: white;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.success-message {
+  padding: 0.75rem;
+  background-color: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+  border-radius: 4px;
+  margin: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.info-message {
+  padding: 0.75rem;
+  background-color: #d1ecf1;
+  color: #0c5460;
+  border: 1px solid #bee5eb;
+  border-radius: 4px;
+  margin: 0.5rem 1rem;
+  font-size: 0.9rem;
 }
 
 .messages-container {
@@ -199,6 +259,12 @@
   padding: 0.5rem;
   background-color: #fee;
   border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.encrypted-placeholder {
+  color: #999;
+  font-style: italic;
   font-size: 0.9rem;
 }
 

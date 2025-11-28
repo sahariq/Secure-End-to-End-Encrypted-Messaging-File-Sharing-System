@@ -9,6 +9,8 @@ router.use(authenticate);
 
 // POST /api/messages
 // Protected route - requires valid JWT token
+// SECURITY: Server NEVER sees or stores plaintext messages
+// Only ciphertext (encrypted data + auth tag) and IV are stored
 router.post('/', async (req, res, next) => {
   try {
     // Use authenticated user's ID from token
@@ -22,7 +24,14 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    // Create message metadata
+    // SECURITY CHECK: Reject if any plaintext field is present
+    if (req.body.plaintext || req.body.message || req.body.text) {
+      return res.status(400).json({
+        message: 'Plaintext messages are not accepted. Messages must be encrypted client-side.'
+      });
+    }
+
+    // Create message metadata (ciphertext only)
     const message = new Message({
       senderId,
       receiverId,
@@ -32,6 +41,9 @@ router.post('/', async (req, res, next) => {
     });
 
     await message.save();
+
+    // DO NOT log ciphertext or IV to console (security best practice)
+    console.log(`✓ Encrypted message stored: ${senderId} -> ${receiverId}`);
 
     res.status(201).json({
       message: 'Message stored successfully',
@@ -45,6 +57,8 @@ router.post('/', async (req, res, next) => {
 
 // GET /api/messages/:conversationId
 // Protected route - requires valid JWT token
+// SECURITY: Returns only ciphertext and IV, never plaintext
+// Decryption happens client-side only
 // Note: conversationId is a combination of two user IDs
 // For simplicity, we'll use format: userId1_userId2 (sorted)
 router.get('/:conversationId', async (req, res, next) => {
