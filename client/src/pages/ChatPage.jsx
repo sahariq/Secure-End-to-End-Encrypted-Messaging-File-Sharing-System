@@ -22,17 +22,8 @@ function ChatPage() {
   const [keyExchangeStatus, setKeyExchangeStatus] = useState('');
   const [hasSessionKey, setHasSessionKey] = useState(false);
   const [keyExchangeData, setKeyExchangeData] = useState(null); // Store initiation data
+  const [contacts, setContacts] = useState([]); // Fetch real users from backend
   const navigate = useNavigate();
-
-  // TODO: Replace with real user list from backend
-  // For now, using dummy contacts for encryption demo
-  // In production: Fetch via GET /api/users to get actual registered users
-  // This ensures conversation IDs and session keys align with real user IDs
-  const contacts = [
-    { id: '1', username: 'Alice' },
-    { id: '2', username: 'Bob' },
-    { id: '3', username: 'Charlie' }
-  ];
 
   const currentUserId = localStorage.getItem('userId');
   const currentUsername = localStorage.getItem('username');
@@ -44,11 +35,24 @@ function ChatPage() {
       return;
     }
 
-    // Set first contact as selected by default
-    if (contacts.length > 0 && !selectedContact) {
-      setSelectedContact(contacts[0]);
-    }
+    // Fetch real users from backend
+    loadContacts();
   }, [navigate]);
+
+  const loadContacts = async () => {
+    try {
+      const response = await apiClient.get('/auth/users');
+      setContacts(response.data);
+      
+      // Set first contact as selected by default
+      if (response.data.length > 0 && !selectedContact) {
+        setSelectedContact(response.data[0]);
+      }
+    } catch (err) {
+      console.error('Error loading contacts:', err);
+      setError('Failed to load contacts');
+    }
+  };
 
   useEffect(() => {
     if (selectedContact && currentUserId) {
@@ -61,11 +65,11 @@ function ChatPage() {
     if (!selectedContact) return;
     
     try {
-      const exists = await hasSessionKeyWithPeer(selectedContact.id);
+      const exists = await hasSessionKeyWithPeer(selectedContact._id);
       setHasSessionKey(exists);
       
       if (exists) {
-        const sessionKey = await getSessionKey(selectedContact.id);
+        const sessionKey = await getSessionKey(selectedContact._id);
         console.log('✓ Session key exists for peer:', selectedContact.username);
         console.log('Session Key:', sessionKey);
       }
@@ -79,7 +83,7 @@ function ChatPage() {
 
     try {
       // Create conversation ID (sorted user IDs)
-      const userIds = [currentUserId, selectedContact.id].sort();
+      const userIds = [currentUserId, selectedContact._id].sort();
       const conversationId = userIds.join('_');
 
       // API request includes JWT token via axios interceptor
@@ -87,7 +91,7 @@ function ChatPage() {
       const encryptedMessages = response.data.messages || [];
 
       // Decrypt messages if session key exists
-      const sessionKey = await getSessionKey(selectedContact.id);
+      const sessionKey = await getSessionKey(selectedContact._id);
       
       const decryptedMessages = await Promise.all(
         encryptedMessages.map(async (msg) => {
@@ -141,7 +145,7 @@ function ChatPage() {
 
     try {
       // Load session key from IndexedDB
-      const sessionKey = await getSessionKey(selectedContact.id);
+      const sessionKey = await getSessionKey(selectedContact._id);
       
       if (!sessionKey) {
         throw new Error('Session key not found. Please run key exchange.');
@@ -160,7 +164,7 @@ function ChatPage() {
       // Send encrypted message to server
       // Server NEVER sees plaintext
       await apiClient.post('/messages', {
-        receiverId: selectedContact.id,
+        receiverId: selectedContact._id,
         ciphertext: ciphertextBase64,
         iv: ivBase64,
         timestamp: new Date().toISOString()
@@ -248,7 +252,7 @@ function ChatPage() {
       console.log('═══════════════════════════════════════════════════════\n');
 
       // PHASE 1: Initiate key exchange (Alice's role)
-      const initiationData = await initiateKeyExchange(selectedContact.id);
+      const initiationData = await initiateKeyExchange(selectedContact._id);
       
       setKeyExchangeStatus('Key exchange initiated. Simulating peer response...');
       
@@ -278,7 +282,7 @@ function ChatPage() {
 
       // PHASE 3: Complete key exchange (Alice completes)
       const sessionKey = await completeKeyExchange(
-        selectedContact.id,
+        selectedContact._id,
         initiationData.ephemeralKeyPair,
         peerResponseData.ephemeralPublicKeyJwk,
         peerResponseData.signature,
@@ -323,8 +327,8 @@ function ChatPage() {
           <ul>
             {contacts.map(contact => (
               <li
-                key={contact.id}
-                className={selectedContact?.id === contact.id ? 'active' : ''}
+                key={contact._id}
+                className={selectedContact?._id === contact._id ? 'active' : ''}
                 onClick={() => setSelectedContact(contact)}
               >
                 {contact.username}

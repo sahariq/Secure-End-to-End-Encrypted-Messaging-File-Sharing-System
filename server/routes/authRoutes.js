@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcrypt';
 import User from '../models/User.js';
 import { generateJWT } from '../utils/jwt.js';
+import { authenticate } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -81,6 +82,23 @@ router.post('/login', async (req, res, next) => {
       userId: user._id,
       username: user.username
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/auth/users - Get all users except current user
+router.get('/users', authenticate, async (req, res, next) => {
+  try {
+    const currentUserId = req.userId; // From JWT token
+
+    // Find all users except the current user
+    const users = await User.find(
+      { _id: { $ne: currentUserId } },
+      'username _id' // Only return username and _id
+    ).sort({ username: 1 });
+
+    res.json(users);
   } catch (error) {
     next(error);
   }
