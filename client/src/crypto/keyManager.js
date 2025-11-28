@@ -54,23 +54,6 @@ export const generateECCKeyPair = async () => {
       ['deriveKey', 'deriveBits'] // Usage for ECDH key derivation
     );
 
-    // Export the public key as JWK
-    // This is safe - public keys are meant to be shared
-    const publicKeyJWK = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
-    
-    // Re-import the public key to ensure it's properly configured as extractable
-    // This ensures we can export the public key as JWK for key exchange in STEP 4
-    const extractablePublicKey = await window.crypto.subtle.importKey(
-      'jwk',
-      publicKeyJWK,
-      {
-        name: 'ECDH',
-        namedCurve: 'P-256'
-      },
-      true, // extractable = true for public key (safe, it's public)
-      ['deriveKey', 'deriveBits'] // Usage for ECDH
-    );
-
     // IMPORTANT: The private key is extractable=true due to API limitations,
     // but we NEVER export it. Security is maintained by:
     // 1. Never calling exportKey on the private key
@@ -78,7 +61,7 @@ export const generateECCKeyPair = async () => {
     // 3. Only using it for key derivation operations
     return {
       privateKey: keyPair.privateKey, // Stored securely, never exported
-      publicKey: extractablePublicKey // Extractable, can be exported as JWK for sharing
+      publicKey: keyPair.publicKey // Extractable, can be exported as JWK for sharing
     };
   } catch (error) {
     throw new Error(`Failed to generate ECC key pair: ${error.message}`);
