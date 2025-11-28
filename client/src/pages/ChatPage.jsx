@@ -8,7 +8,7 @@ import {
   uploadMyPublicKey,
   hasSessionKeyWithPeer
 } from '../crypto/keyExchange';
-import { getSessionKey } from '../crypto/sessionStore';
+import { getSessionKey, saveSessionKey } from '../crypto/sessionStore';
 import { loadKeyPair, loadSigningKeyPair, exportPublicKeyAsJWKString } from '../crypto/keyManager';
 import { encryptMessage, decryptMessage } from '../crypto/encryption';
 import './ChatPage.css';
@@ -239,6 +239,18 @@ function ChatPage() {
    * 
    * In production, steps 2-3 would involve actual message exchange via server.
    */
+  /**
+   * STEP 4: Start Secure Key Exchange
+   * 
+   * Full Signed ECDH Protocol Implementation:
+   * 1. User A initiates: generates ephemeral keys, signs with identity key
+   * 2. Fetches User B's identity public key from server
+   * 3. Both users derive shared secret via ECDH
+   * 4. Both derive session key via HKDF
+   * 5. Signatures prevent MITM attacks
+   * 
+   * For 2-tab testing: Both users click "Start Key Exchange" on their contact
+   */
   const handleStartKeyExchange = async () => {
     if (!selectedContact) {
       setError('Please select a contact first');
@@ -252,63 +264,173 @@ function ChatPage() {
       console.log('\n🚀 Starting Signed ECDH Key Exchange with:', selectedContact.username);
       console.log('═══════════════════════════════════════════════════════\n');
 
-      // PHASE 1: Initiate key exchange (Alice's role)
-      const initiationData = await initiateKeyExchange(selectedContact._id);
+      // STEP 1: Load my keys (ECDH for key exchange, ECDSA for signing)
+      console.log('[1/6] Loading my identity keys...');
+      const myIdentityKeys = await loadKeyPair(); // ECDH keys
+      const mySigningKeys = await loadSigningKeyPair(); // ECDSA keys
       
-      setKeyExchangeStatus('Key exchange initiated. Simulating peer response...');
-      
-      // Store initiation data for later completion
-      setKeyExchangeData(initiationData);
+      if (!myIdentityKeys || !mySigningKeys) {
+        throw new Error('Identity keys not found. Please re-login.');
+      }
 
-      // ─────────────────────────────────────────────────────────────────
-      // SIMULATION: In real implementation, you would:
-      // 1. Send initiationData to peer via encrypted message/server
-      // 2. Peer calls respondToKeyExchange() and sends back their data
-      // 3. You call completeKeyExchange() with peer's response
-      // ─────────────────────────────────────────────────────────────────
-
-      console.log('\n[SIMULATION] Simulating peer response...');
-      console.log('In production, peer would receive your ephemeral public key');
-      console.log('and respond with their own signed ephemeral public key.\n');
-
-      // PHASE 2: Simulate peer response (Bob's role)
-      // In reality, selectedContact would do this on their device
-      const peerResponseData = await respondToKeyExchange(
-        currentUserId, // Peer sees us as the peer
-        initiationData.ephemeralPublicKeyJwk,
-        initiationData.signature
+      // STEP 2: Generate ephemeral ECDH key pair for this session
+      console.log('[2/6] Generating ephemeral ECDH key pair...');
+      const ephemeralKeyPair = await window.crypto.subtle.generateKey(
+        {
+          name: 'ECDH',
+          namedCurve: 'P-256'
+        },
+        true,
+        ['deriveKey', 'deriveBits']
       );
 
-      setKeyExchangeStatus('Received peer response. Completing exchange...');
+      // STEP 3: Export and sign my ephemeral public key
+      console.log('[3/6] Signing ephemeral public key...');
+      const myEphemeralPubKeyJwk = await window.crypto.subtle.exportKey('jwk', ephemeralKeyPair.publicKey);
+      const myEphemeralPubKeyString = JSON.stringify(myEphemeralPubKeyJwk);
+      
+      const { signMessage, signatureToBase64 } = await import('../crypto/signing.js');
+      const mySignature = await signMessage(mySigningKeys.privateKey, myEphemeralPubKeyString);
+      const mySignatureBase64 = signatureToBase64(mySignature);
 
-      // PHASE 3: Complete key exchange (Alice completes)
-      const sessionKey = await completeKeyExchange(
-        selectedContact._id,
-        initiationData.ephemeralKeyPair,
-        peerResponseData.ephemeralPublicKeyJwk,
-        peerResponseData.signature,
-        initiationData.peerIdentityPublicKey
+      // STEP 4: Fetch peer's identity public key from server
+      console.log('[4/6] Fetching peer\'s identity public key from server...');
+      const { requestPublicKeyFromServer } = await import('../crypto/keyExchange.js');
+      const peerIdentityPublicKey = await requestPublicKeyFromServer(selectedContact._id);
+      
+      console.log('✓ Peer\'s public key retrieved');
+
+      // STEP 5: For 2-tab demo, store my exchange data in localStorage for peer to retrieve
+      console.log('[5/6] Publishing my signed ephemeral key...');
+      const myExchangeData = {
+        userId: currentUserId,
+        ephemeralPublicKeyJwk: myEphemeralPubKeyJwk,
+        signature: mySignatureBase64,
+        timestamp: Date.now()
+      };
+      
+      // Store in localStorage with key based on conversation
+      const conversationKey = `key_exchange_${currentUserId}_to_${selectedContact._id}`;
+      localStorage.setItem(conversationKey, JSON.stringify(myExchangeData));
+
+      // STEP 6: Try to retrieve peer's exchange data
+      console.log('[6/6] Checking for peer\'s exchange data...');
+      const peerConversationKey = `key_exchange_${selectedContact._id}_to_${currentUserId}`;
+      const peerExchangeDataStr = localStorage.getItem(peerConversationKey);
+
+      if (!peerExchangeDataStr) {
+        // Peer hasn't initiated yet - wait for them
+        setKeyExchangeStatus('⏳ Waiting for peer to accept key exchange...');
+        console.log('\n⏳ Waiting for peer to initiate their side...');
+        console.log('💡 Have the other user (in another tab) select you and click "Start Key Exchange"');
+        
+        // Poll for peer's data
+        const pollInterval = setInterval(async () => {
+          const peerData = localStorage.getItem(peerConversationKey);
+          if (peerData) {
+            clearInterval(pollInterval);
+            await completeDerivedKey(JSON.parse(peerData), ephemeralKeyPair, peerIdentityPublicKey);
+          }
+        }, 1000);
+        
+        // Clean up after 60 seconds
+        setTimeout(() => clearInterval(pollInterval), 60000);
+        return;
+      }
+
+      // Peer's data exists - complete the exchange
+      const peerExchangeData = JSON.parse(peerExchangeDataStr);
+      await completeDerivedKey(peerExchangeData, ephemeralKeyPair, peerIdentityPublicKey);
+
+    } catch (err) {
+      console.error('❌ Key exchange failed:', err);
+      setError(`Key exchange failed: ${err.message}`);
+      setKeyExchangeStatus('');
+    }
+  };
+
+  // Helper function to complete key derivation
+  const completeDerivedKey = async (peerExchangeData, myEphemeralKeyPair, peerIdentityPublicKey) => {
+    try {
+      console.log('\n[COMPLETING KEY EXCHANGE]');
+      
+      // Verify peer's signature
+      console.log('[7/9] Verifying peer\'s signature...');
+      const { verifySignature, base64ToSignature } = await import('../crypto/signing.js');
+      const peerEphemeralPubKeyString = JSON.stringify(peerExchangeData.ephemeralPublicKeyJwk);
+      const peerSignature = base64ToSignature(peerExchangeData.signature);
+      
+      const isValid = await verifySignature(peerIdentityPublicKey, peerEphemeralPubKeyString, peerSignature);
+      
+      if (!isValid) {
+        throw new Error('⚠️ SIGNATURE VERIFICATION FAILED! Possible MITM attack.');
+      }
+      console.log('✓ Peer signature verified - identity authenticated');
+
+      // Import peer's ephemeral public key
+      console.log('[8/9] Importing peer\'s ephemeral public key...');
+      const peerEphemeralPublicKey = await window.crypto.subtle.importKey(
+        'jwk',
+        peerExchangeData.ephemeralPublicKeyJwk,
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true,
+        []
       );
 
+      // Derive shared secret using ECDH
+      console.log('[9/9] Deriving shared secret and session key...');
+      const sharedSecretBits = await window.crypto.subtle.deriveBits(
+        {
+          name: 'ECDH',
+          public: peerEphemeralPublicKey
+        },
+        myEphemeralKeyPair.privateKey,
+        256
+      );
+
+      // Derive session key using HKDF
+      const sharedSecretKey = await window.crypto.subtle.importKey(
+        'raw',
+        sharedSecretBits,
+        'HKDF',
+        false,
+        ['deriveKey']
+      );
+
+      const encoder = new TextEncoder();
+      const sessionKey = await window.crypto.subtle.deriveKey(
+        {
+          name: 'HKDF',
+          hash: 'SHA-256',
+          salt: encoder.encode('secure-messaging-v1'),
+          info: encoder.encode('aes-gcm-session-key')
+        },
+        sharedSecretKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+
+      // Store session key
+      await saveSessionKey(selectedContact._id, sessionKey);
+      
       // Update UI
       setHasSessionKey(true);
       setKeyExchangeStatus('✓ Secure session established!');
       
       console.log('\n═══════════════════════════════════════════════════════');
-      console.log('✅ KEY EXCHANGE COMPLETE');
+      console.log('✅ SIGNED ECDH KEY EXCHANGE COMPLETE');
       console.log('═══════════════════════════════════════════════════════');
-      console.log('Session Key Object:', sessionKey);
-      console.log('Session key type:', sessionKey.type);
-      console.log('Session key algorithm:', sessionKey.algorithm.name);
-      console.log('Session key length:', sessionKey.algorithm.length, 'bits');
-      console.log('Session key usages:', sessionKey.usages);
-      console.log('\n✓ Ready for end-to-end encrypted messaging!');
+      console.log('✓ Shared secret derived via ECDH');
+      console.log('✓ Session key derived via HKDF-SHA256');
+      console.log('✓ Signatures verified - MITM protection active');
+      console.log('✓ Ready for AES-256-GCM encrypted messaging!');
       console.log('═══════════════════════════════════════════════════════\n');
 
-      setTimeout(() => setKeyExchangeStatus(''), 5000);
+      setTimeout(() => setKeyExchangeStatus(''), 3000);
     } catch (err) {
-      console.error('❌ Key exchange failed:', err);
-      setError(`Key exchange failed: ${err.message}`);
+      console.error('❌ Key derivation failed:', err);
+      setError(`Key derivation failed: ${err.message}`);
       setKeyExchangeStatus('');
     }
   };
