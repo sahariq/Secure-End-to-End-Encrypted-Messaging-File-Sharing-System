@@ -55,15 +55,25 @@ function ChatPage() {
   };
 
   useEffect(() => {
+    let messagePollInterval;
+
     if (selectedContact && currentUserId) {
       loadMessages();
       checkSessionKeyStatus();
       setKeyExchangeStatus(''); // Clear status when switching contacts
       setError('');
+
+      // Poll for new messages every 2 seconds
+      messagePollInterval = setInterval(() => {
+        loadMessages();
+      }, 2000);
     }
 
-    // Cleanup polling interval on unmount
+    // Cleanup polling intervals on unmount or contact change
     return () => {
+      if (messagePollInterval) {
+        clearInterval(messagePollInterval);
+      }
       if (window.keyExchangePollInterval) {
         clearInterval(window.keyExchangePollInterval);
       }
