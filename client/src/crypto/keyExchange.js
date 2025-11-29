@@ -28,26 +28,28 @@
  * PHASE 2: Key Exchange Initiation (Alice starts)
  * ------------------------------------------------
  * 3. Alice generates ephemeral ECDH key pair (A_eph_priv, A_eph_pub)
- * 4. Alice signs A_eph_pub with her identity private key → signature_A
+ * 4. Alice exports A_eph_pub as SPKI (raw bytes) and signs it → signature_A
  * 5. Alice retrieves Bob's identity public key from server
- * 6. Alice sends {A_eph_pub, signature_A} to Bob (via server)
+ * 6. Alice sends {A_eph_pub (JWK), signature_A} to Bob (via server)
  * 
  * PHASE 3: Key Exchange Response (Bob responds)
  * ----------------------------------------------
- * 7. Bob verifies signature_A using Alice's identity public key
+ * 7. Bob imports A_eph_pub (JWK), exports as SPKI, and verifies signature_A
  * 8. If valid, Bob generates ephemeral ECDH key pair (B_eph_priv, B_eph_pub)
- * 9. Bob signs B_eph_pub with his identity private key → signature_B
+ * 9. Bob exports B_eph_pub as SPKI and signs it → signature_B
  * 10. Bob computes: sharedSecret = ECDH(B_eph_priv, A_eph_pub)
  * 11. Bob derives: sessionKey = HKDF(sharedSecret, salt, info)
- * 12. Bob sends {B_eph_pub, signature_B} to Alice
- * 13. Bob stores sessionKey in IndexedDB
+ * 12. Bob generates Key Confirmation: Encrypt("Key Confirmation") with sessionKey
+ * 13. Bob sends {B_eph_pub (JWK), signature_B, keyConfirmation} to Alice
+ * 14. Bob stores sessionKey in IndexedDB
  * 
  * PHASE 4: Session Key Derivation (Alice completes)
  * --------------------------------------------------
- * 14. Alice verifies signature_B using Bob's identity public key
- * 15. If valid, Alice computes: sharedSecret = ECDH(A_eph_priv, B_eph_pub)
- * 16. Alice derives: sessionKey = HKDF(sharedSecret, salt, info)
- * 17. Alice stores sessionKey in IndexedDB
+ * 15. Alice imports B_eph_pub (JWK), exports as SPKI, and verifies signature_B
+ * 16. If valid, Alice computes: sharedSecret = ECDH(A_eph_priv, B_eph_pub)
+ * 17. Alice derives: sessionKey = HKDF(sharedSecret, salt, info)
+ * 18. Alice verifies Key Confirmation: Decrypt(keyConfirmation) == "Key Confirmation"
+ * 19. Alice stores sessionKey in IndexedDB
  * 
  * RESULT: Both have identical sessionKey (AES-GCM key for messaging)
  * 
@@ -71,6 +73,7 @@
 import { loadKeyPair, loadSigningKeyPair } from './keyManager.js';
 import { signMessage, verifySignature, signatureToBase64, base64ToSignature } from './signing.js';
 import { saveSessionKey, getSessionKey } from './sessionStore.js';
+import { encryptMessage, decryptMessage } from './encryption.js';
 import apiClient from '../utils/api.js';
 
 /**
@@ -267,12 +270,12 @@ export const deriveSessionKeyHKDF = async (sharedSecret, salt = 'secure-messagin
  * 
  * This function performs PHASE 2 of the protocol:
  * - Generates ephemeral ECDH key pair
- * - Signs the ephemeral public key
+ * - Exports public key as SPKI (for signing) and JWK (for transport)
+ * - Signs the SPKI bytes
  * - Retrieves peer's identity public key
- * - Sends signed ephemeral public key to peer
  * 
  * @param {string} peerUserId - The user ID of the peer (Bob)
- * @returns {Promise<{ephemeralKeyPair: Object, peerIdentityPublicKey: CryptoKey}>}
+ * @returns {Promise<{ephemeralKeyPair: Object, ephemeralPublicKeyJwk: Object, signature: string, peerIdentityPublicKey: CryptoKey}>}
  */
 export const initiateKeyExchange = async (peerUserId) => {
   try {
@@ -293,30 +296,30 @@ export const initiateKeyExchange = async (peerUserId) => {
     console.log('[2/6] Generating ephemeral ECDH key pair...');
     const ephemeralKeyPair = await generateEphemeralECDHKeyPair();
 
-    // STEP 3: Export ephemeral public key as JWK
+    // STEP 3: Export ephemeral public key as SPKI (for signing) and JWK (for transport)
     console.log('[3/6] Exporting ephemeral public key...');
+    const ephemeralPublicKeySpki = await window.crypto.subtle.exportKey(
+      'spki',
+      ephemeralKeyPair.publicKey
+    );
     const ephemeralPublicKeyJwk = await window.crypto.subtle.exportKey(
       'jwk',
       ephemeralKeyPair.publicKey
     );
 
-    // STEP 4: Sign ephemeral public key with identity signing private key
-    console.log('[4/6] Signing ephemeral public key...');
-    const ephemeralPubKeyString = JSON.stringify(ephemeralPublicKeyJwk);
+    // STEP 4: Sign ephemeral public key (SPKI bytes) with identity signing private key
+    console.log('[4/6] Signing ephemeral public key (SPKI)...');
     
-    const signature = await signMessage(mySigningKeys.privateKey, ephemeralPubKeyString);
+    // We sign the SPKI bytes directly to avoid JSON serialization issues
+    const signature = await signMessage(mySigningKeys.privateKey, ephemeralPublicKeySpki);
     const signatureBase64 = signatureToBase64(signature);
 
     // STEP 5: Retrieve peer's identity public key
     console.log('[5/6] Retrieving peer\'s identity public key from server...');
     const peerIdentityPublicKey = await requestPublicKeyFromServer(peerUserId);
 
-    // STEP 6: Send signed ephemeral public key to peer (via server)
-    console.log('[6/6] Sending signed ephemeral public key to peer...');
-    
-    // TODO: In STEP 5, this will be sent via encrypted message
-    // For now, we'll simulate by storing in a temporary location
-    console.log('\n✓ Key exchange initiated successfully!');
+    // STEP 6: Return data to be sent to peer
+    console.log('[6/6] Key exchange initiated successfully!');
     console.log('Ephemeral public key (JWK):', ephemeralPublicKeyJwk);
     console.log('Signature (Base64):', signatureBase64);
     console.log('\n[NEXT] Waiting for peer\'s response...\n');
@@ -337,16 +340,16 @@ export const initiateKeyExchange = async (peerUserId) => {
  * Respond to key exchange (Bob's role)
  * 
  * This function performs PHASE 3 of the protocol:
- * - Verifies peer's signature on their ephemeral public key
+ * - Verifies peer's signature on their ephemeral public key (reconstructed SPKI)
  * - Generates own ephemeral ECDH key pair
  * - Derives shared secret and session key
  * - Signs own ephemeral public key
- * - Sends response to peer
+ * - Generates Key Confirmation
  * 
  * @param {string} peerUserId - The user ID of the peer (Alice)
  * @param {Object} receivedEphemeralPubKeyJwk - Peer's ephemeral public key (JWK)
  * @param {string} receivedSignatureBase64 - Peer's signature (Base64)
- * @returns {Promise<{sessionKey: CryptoKey, ephemeralPublicKeyJwk: Object, signature: string}>}
+ * @returns {Promise<{sessionKey: CryptoKey, ephemeralPublicKeyJwk: Object, signature: string, keyConfirmation: Object}>}
  */
 export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJwk, receivedSignatureBase64) => {
   try {
@@ -356,27 +359,11 @@ export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJw
     console.log(`Peer User ID: ${peerUserId}\n`);
 
     // STEP 1: Retrieve peer's identity public key
-    console.log('[1/8] Retrieving peer\'s identity public key...');
+    console.log('[1/9] Retrieving peer\'s identity public key...');
     const peerIdentityPublicKey = await requestPublicKeyFromServer(peerUserId);
 
-    // STEP 2: Verify peer's signature
-    console.log('[2/8] Verifying peer\'s signature...');
-    const receivedEphemeralPubKeyString = JSON.stringify(receivedEphemeralPubKeyJwk);
-    const receivedSignature = base64ToSignature(receivedSignatureBase64);
-    
-    const isSignatureValid = await verifySignature(
-      peerIdentityPublicKey,
-      receivedEphemeralPubKeyString,
-      receivedSignature
-    );
-
-    if (!isSignatureValid) {
-      throw new Error('⚠️  SIGNATURE VERIFICATION FAILED! Possible MITM attack.');
-    }
-    console.log('✓ Signature verified! Peer identity authenticated.');
-
-    // STEP 3: Import peer's ephemeral public key
-    console.log('[3/8] Importing peer\'s ephemeral public key...');
+    // STEP 2: Import peer's ephemeral public key
+    console.log('[2/9] Importing peer\'s ephemeral public key...');
     const peerEphemeralPublicKey = await window.crypto.subtle.importKey(
       'jwk',
       receivedEphemeralPubKeyJwk,
@@ -388,36 +375,67 @@ export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJw
       [] // No operations needed (used as peer key in ECDH)
     );
 
+    // STEP 3: Verify peer's signature using SPKI
+    console.log('[3/9] Verifying peer\'s signature...');
+    // Export to SPKI to verify signature (must match what sender signed)
+    const peerEphemeralPublicKeySpki = await window.crypto.subtle.exportKey(
+      'spki',
+      peerEphemeralPublicKey
+    );
+    
+    const receivedSignature = base64ToSignature(receivedSignatureBase64);
+    
+    const isSignatureValid = await verifySignature(
+      peerIdentityPublicKey,
+      peerEphemeralPublicKeySpki,
+      receivedSignature
+    );
+
+    if (!isSignatureValid) {
+      throw new Error('⚠️  SIGNATURE VERIFICATION FAILED! Possible MITM attack.');
+    }
+    console.log('✓ Signature verified! Peer identity authenticated.');
+
     // STEP 4: Generate my ephemeral ECDH key pair
-    console.log('[4/8] Generating my ephemeral ECDH key pair...');
+    console.log('[4/9] Generating my ephemeral ECDH key pair...');
     const myEphemeralKeyPair = await generateEphemeralECDHKeyPair();
 
     // STEP 5: Derive shared secret using ECDH
-    console.log('[5/8] Deriving ECDH shared secret...');
+    console.log('[5/9] Deriving ECDH shared secret...');
     const sharedSecret = await deriveSharedSecret(
       myEphemeralKeyPair.privateKey,
       peerEphemeralPublicKey
     );
 
     // STEP 6: Derive session key using HKDF
-    console.log('[6/8] Deriving session key via HKDF...');
+    console.log('[6/9] Deriving session key via HKDF...');
     const sessionKey = await deriveSessionKeyHKDF(sharedSecret);
 
     // STEP 7: Store session key in IndexedDB
-    console.log('[7/8] Storing session key in IndexedDB...');
+    console.log('[7/9] Storing session key in IndexedDB...');
     await saveSessionKey(peerUserId, sessionKey);
 
-    // STEP 8: Sign my ephemeral public key and send response
-    console.log('[8/8] Signing my ephemeral public key...');
+    // STEP 8: Sign my ephemeral public key (SPKI)
+    console.log('[8/9] Signing my ephemeral public key...');
     const mySigningKeys = await loadSigningKeyPair();
+    
+    // Export to SPKI for signing
+    const myEphemeralPublicKeySpki = await window.crypto.subtle.exportKey(
+      'spki',
+      myEphemeralKeyPair.publicKey
+    );
+    // Export to JWK for transport
     const myEphemeralPublicKeyJwk = await window.crypto.subtle.exportKey(
       'jwk',
       myEphemeralKeyPair.publicKey
     );
-    const myEphemeralPubKeyString = JSON.stringify(myEphemeralPublicKeyJwk);
     
-    const mySignature = await signMessage(mySigningKeys.privateKey, myEphemeralPubKeyString);
+    const mySignature = await signMessage(mySigningKeys.privateKey, myEphemeralPublicKeySpki);
     const mySignatureBase64 = signatureToBase64(mySignature);
+
+    // STEP 9: Generate Key Confirmation
+    console.log('[9/9] Generating Key Confirmation...');
+    const keyConfirmation = await encryptMessage(sessionKey, "Key Confirmation");
 
     console.log('\n✓ Key exchange response complete!');
     console.log('✓ Session key established and stored');
@@ -428,7 +446,8 @@ export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJw
     return {
       sessionKey,
       ephemeralPublicKeyJwk: myEphemeralPublicKeyJwk,
-      signature: mySignatureBase64
+      signature: mySignatureBase64,
+      keyConfirmation
     };
   } catch (error) {
     console.error('❌ Key exchange response failed:', error);
@@ -442,12 +461,14 @@ export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJw
  * This function performs PHASE 4 of the protocol:
  * - Verifies Bob's signature on his ephemeral public key
  * - Derives shared secret and session key
+ * - Verifies Key Confirmation
  * - Stores session key
  * 
  * @param {string} peerUserId - The user ID of the peer (Bob)
  * @param {Object} myEphemeralKeyPair - My ephemeral key pair from initiation
  * @param {Object} receivedEphemeralPubKeyJwk - Peer's ephemeral public key (JWK)
  * @param {string} receivedSignatureBase64 - Peer's signature (Base64)
+ * @param {Object} keyConfirmation - Key confirmation data (ciphertext + IV)
  * @param {CryptoKey} peerIdentityPublicKey - Peer's identity public key
  * @returns {Promise<CryptoKey>} The derived session key
  */
@@ -456,6 +477,7 @@ export const completeKeyExchange = async (
   myEphemeralKeyPair,
   receivedEphemeralPubKeyJwk,
   receivedSignatureBase64,
+  keyConfirmation,
   peerIdentityPublicKey
 ) => {
   try {
@@ -464,24 +486,8 @@ export const completeKeyExchange = async (
     console.log('═══════════════════════════════════════════════════════');
     console.log(`Peer User ID: ${peerUserId}\n`);
 
-    // STEP 1: Verify peer's signature
-    console.log('[1/5] Verifying peer\'s signature...');
-    const receivedEphemeralPubKeyString = JSON.stringify(receivedEphemeralPubKeyJwk);
-    const receivedSignature = base64ToSignature(receivedSignatureBase64);
-    
-    const isSignatureValid = await verifySignature(
-      peerIdentityPublicKey,
-      receivedEphemeralPubKeyString,
-      receivedSignature
-    );
-
-    if (!isSignatureValid) {
-      throw new Error('⚠️  SIGNATURE VERIFICATION FAILED! Possible MITM attack.');
-    }
-    console.log('✓ Signature verified! Peer identity authenticated.');
-
-    // STEP 2: Import peer's ephemeral public key
-    console.log('[2/5] Importing peer\'s ephemeral public key...');
+    // STEP 1: Import peer's ephemeral public key
+    console.log('[1/6] Importing peer\'s ephemeral public key...');
     const peerEphemeralPublicKey = await window.crypto.subtle.importKey(
       'jwk',
       receivedEphemeralPubKeyJwk,
@@ -493,19 +499,60 @@ export const completeKeyExchange = async (
       []
     );
 
+    // STEP 2: Verify peer's signature using SPKI
+    console.log('[2/6] Verifying peer\'s signature...');
+    const peerEphemeralPublicKeySpki = await window.crypto.subtle.exportKey(
+      'spki',
+      peerEphemeralPublicKey
+    );
+    
+    const receivedSignature = base64ToSignature(receivedSignatureBase64);
+    
+    const isSignatureValid = await verifySignature(
+      peerIdentityPublicKey,
+      peerEphemeralPublicKeySpki,
+      receivedSignature
+    );
+
+    if (!isSignatureValid) {
+      throw new Error('⚠️  SIGNATURE VERIFICATION FAILED! Possible MITM attack.');
+    }
+    console.log('✓ Signature verified! Peer identity authenticated.');
+
     // STEP 3: Derive shared secret using ECDH
-    console.log('[3/5] Deriving ECDH shared secret...');
+    console.log('[3/6] Deriving ECDH shared secret...');
     const sharedSecret = await deriveSharedSecret(
       myEphemeralKeyPair.privateKey,
       peerEphemeralPublicKey
     );
 
     // STEP 4: Derive session key using HKDF
-    console.log('[4/5] Deriving session key via HKDF...');
+    console.log('[4/6] Deriving session key via HKDF...');
     const sessionKey = await deriveSessionKeyHKDF(sharedSecret);
 
-    // STEP 5: Store session key in IndexedDB
-    console.log('[5/5] Storing session key in IndexedDB...');
+    // STEP 5: Verify Key Confirmation
+    console.log('[5/6] Verifying Key Confirmation...');
+    if (!keyConfirmation || !keyConfirmation.ciphertextBase64 || !keyConfirmation.ivBase64) {
+      throw new Error('Missing Key Confirmation data');
+    }
+    
+    try {
+      const confirmationPlaintext = await decryptMessage(
+        sessionKey, 
+        keyConfirmation.ciphertextBase64, 
+        keyConfirmation.ivBase64
+      );
+      
+      if (confirmationPlaintext !== "Key Confirmation") {
+        throw new Error('Key Confirmation message mismatch');
+      }
+      console.log('✓ Key Confirmation verified! Keys match.');
+    } catch (error) {
+      throw new Error(`Key Confirmation Failed: ${error.message}`);
+    }
+
+    // STEP 6: Store session key in IndexedDB
+    console.log('[6/6] Storing session key in IndexedDB...');
     await saveSessionKey(peerUserId, sessionKey);
 
     console.log('\n✓ Key exchange completed successfully!');

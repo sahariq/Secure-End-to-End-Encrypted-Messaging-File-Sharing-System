@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../utils/api';
-import { 
-  initiateKeyExchange, 
-  respondToKeyExchange, 
+import {
+  initiateKeyExchange,
+  respondToKeyExchange,
   completeKeyExchange,
   uploadMyPublicKey,
   hasSessionKeyWithPeer
@@ -43,7 +43,7 @@ function ChatPage() {
     try {
       const response = await apiClient.get('/auth/users');
       setContacts(response.data);
-      
+
       // Set first contact as selected by default
       if (response.data.length > 0 && !selectedContact) {
         setSelectedContact(response.data[0]);
@@ -59,7 +59,7 @@ function ChatPage() {
       loadMessages();
       checkSessionKeyStatus();
     }
-    
+
     // Cleanup polling interval on unmount
     return () => {
       if (window.keyExchangePollInterval) {
@@ -68,13 +68,29 @@ function ChatPage() {
     };
   }, [selectedContact, currentUserId]);
 
+  // Purge stale data on mount
+  useEffect(() => {
+    const purgeStaleData = async () => {
+      try {
+        await apiClient.delete('/keys/exchange/purge');
+        console.log('✓ Stale key exchange data purged from server');
+      } catch (err) {
+        console.error('Failed to purge stale data:', err);
+      }
+    };
+
+    if (currentUserId) {
+      purgeStaleData();
+    }
+  }, [currentUserId]);
+
   const checkSessionKeyStatus = async () => {
     if (!selectedContact) return;
-    
+
     try {
       const exists = await hasSessionKeyWithPeer(selectedContact._id);
       setHasSessionKey(exists);
-      
+
       if (exists) {
         const sessionKey = await getSessionKey(selectedContact._id);
         console.log('✓ Session key exists for peer:', selectedContact.username);
@@ -99,7 +115,7 @@ function ChatPage() {
 
       // Decrypt messages if session key exists
       const sessionKey = await getSessionKey(selectedContact._id);
-      
+
       const decryptedMessages = await Promise.all(
         encryptedMessages.map(async (msg) => {
           // Try to decrypt the message
@@ -153,7 +169,7 @@ function ChatPage() {
     try {
       // Load session key from IndexedDB
       const sessionKey = await getSessionKey(selectedContact._id);
-      
+
       if (!sessionKey) {
         throw new Error('Session key not found. Please run key exchange.');
       }
@@ -224,7 +240,7 @@ function ChatPage() {
 
       setKeyExchangeStatus('✓ Public key uploaded successfully!');
       console.log('✓ Public key uploaded to server');
-      
+
       setTimeout(() => setKeyExchangeStatus(''), 3000);
     } catch (err) {
       console.error('Error uploading public key:', err);
@@ -236,27 +252,11 @@ function ChatPage() {
   /**
    * STEP 4: Start Secure Key Exchange
    * 
-   * Initiates the signed ECDH key exchange protocol with the selected contact.
-   * This is Phase 2 of the protocol (Alice's initiation).
-   * 
-   * For demonstration purposes, this simplified version:
-   * 1. Initiates key exchange (generates ephemeral keys, signs)
-   * 2. Simulates peer response
-   * 3. Completes the exchange
-   * 
-   * In production, steps 2-3 would involve actual message exchange via server.
-   */
-  /**
-   * STEP 4: Start Secure Key Exchange
-   * 
    * Full Signed ECDH Protocol Implementation:
-   * 1. User A initiates: generates ephemeral keys, signs with identity key
-   * 2. Fetches User B's identity public key from server
-   * 3. Both users derive shared secret via ECDH
-   * 4. Both derive session key via HKDF
-   * 5. Signatures prevent MITM attacks
-   * 
-   * For 2-tab testing: Both users click "Start Key Exchange" on their contact
+   * 1. Check if peer has already initiated (and data is fresh)
+   * 2. If yes: Respond (Phase 3)
+   * 3. If no: Initiate (Phase 2) and wait for response (Phase 4)
+   * 4. Handle collisions (both initiated) via User ID tie-breaker
    */
   const handleStartKeyExchange = async () => {
     if (!selectedContact) {
@@ -265,192 +265,209 @@ function ChatPage() {
     }
 
     try {
-      setKeyExchangeStatus('Starting key exchange...');
+      setKeyExchangeStatus('Checking for existing exchange...');
       setError('');
+      setLoading(true);
 
       console.log('\n🚀 Starting Signed ECDH Key Exchange with:', selectedContact.username);
       console.log('═══════════════════════════════════════════════════════\n');
 
-      // STEP 1: Load my keys (ECDH for key exchange, ECDSA for signing)
-      console.log('[1/6] Loading my identity keys...');
-      const myIdentityKeys = await loadKeyPair(); // ECDH keys
-      const mySigningKeys = await loadSigningKeyPair(); // ECDSA keys
-      
-      if (!myIdentityKeys || !mySigningKeys) {
-        throw new Error('Identity keys not found. Please re-login.');
-      }
+      // Check if peer has already initiated key exchange
+      let peerExchangeData = null;
+      try {
+        const response = await apiClient.get(`/keys/exchange/${selectedContact._id}`);
+        const data = response.data;
 
-      // STEP 2: Generate ephemeral ECDH key pair for this session
-      console.log('[2/6] Generating ephemeral ECDH key pair...');
-      const ephemeralKeyPair = await window.crypto.subtle.generateKey(
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256'
-        },
-        true,
-        ['deriveKey', 'deriveBits']
-      );
+        // Check for stale data (older than 2 minutes)
+        if (data && data.timestamp) {
+          const exchangeTime = new Date(data.timestamp).getTime();
+          const now = Date.now();
+          const twoMinutes = 2 * 60 * 1000;
 
-      // STEP 3: Export and sign my ephemeral public key
-      console.log('[3/6] Signing ephemeral public key...');
-      const myEphemeralPubKeyJwk = await window.crypto.subtle.exportKey('jwk', ephemeralKeyPair.publicKey);
-      const myEphemeralPubKeyString = JSON.stringify(myEphemeralPubKeyJwk);
-      
-      const { signMessage, signatureToBase64 } = await import('../crypto/signing.js');
-      const mySignature = await signMessage(mySigningKeys.privateKey, myEphemeralPubKeyString);
-      const mySignatureBase64 = signatureToBase64(mySignature);
-
-      // STEP 4: Fetch peer's identity public key from server
-      console.log('[4/6] Fetching peer\'s identity public key from server...');
-      const { requestPublicKeyFromServer } = await import('../crypto/keyExchange.js');
-      const peerIdentityPublicKey = await requestPublicKeyFromServer(selectedContact._id);
-      
-      console.log('✓ Peer\'s public key retrieved');
-
-      // STEP 5: For 2-tab demo, store my exchange data in localStorage for peer to retrieve
-      console.log('[5/6] Publishing my signed ephemeral key...');
-      const myExchangeData = {
-        userId: currentUserId,
-        ephemeralPublicKeyJwk: myEphemeralPubKeyJwk,
-        signature: mySignatureBase64,
-        timestamp: Date.now()
-      };
-      
-      // Store in localStorage with key based on conversation
-      const conversationKey = `key_exchange_${currentUserId}_to_${selectedContact._id}`;
-      localStorage.setItem(conversationKey, JSON.stringify(myExchangeData));
-
-      // STEP 6: Check if peer's exchange data already exists
-      console.log('[6/6] Checking for peer\'s exchange data...');
-      const peerConversationKey = `key_exchange_${selectedContact._id}_to_${currentUserId}`;
-      const peerExchangeDataStr = localStorage.getItem(peerConversationKey);
-
-      if (peerExchangeDataStr) {
-        // Peer's data exists - complete immediately
-        console.log('✓ Peer\'s exchange data found! Completing exchange...');
-        const peerExchangeData = JSON.parse(peerExchangeDataStr);
-        await completeDerivedKey(peerExchangeData, ephemeralKeyPair, peerIdentityPublicKey);
-        return;
-      }
-
-      // Peer hasn't initiated yet - poll for their data
-      setKeyExchangeStatus('⏳ Waiting for peer to accept key exchange...');
-      console.log('\n⏳ Waiting for peer to initiate their side...');
-      console.log('💡 Have the other user (in another tab) select you and click "Start Key Exchange"');
-      
-      // Aggressive polling every 500ms
-      let attempts = 0;
-      const maxAttempts = 120; // 60 seconds total
-      
-      const pollInterval = setInterval(async () => {
-        attempts++;
-        const peerData = localStorage.getItem(peerConversationKey);
-        
-        if (peerData) {
-          clearInterval(pollInterval);
-          console.log('✓ Peer\'s exchange data received!');
-          const peerExchangeData = JSON.parse(peerData);
-          await completeDerivedKey(peerExchangeData, ephemeralKeyPair, peerIdentityPublicKey);
-        } else if (attempts >= maxAttempts) {
-          clearInterval(pollInterval);
-          setKeyExchangeStatus('⏱️ Key exchange timed out. Try again.');
-          setError('Peer did not respond to key exchange');
+          if (now - exchangeTime > twoMinutes) {
+            console.log('⚠️ Found stale exchange data from peer. Ignoring.');
+            peerExchangeData = null;
+          } else {
+            peerExchangeData = data;
+          }
         }
-      }, 500);
-      
-      // Store interval ID for cleanup
-      window.keyExchangePollInterval = pollInterval;
+      } catch (err) {
+        if (err.response?.status !== 404) {
+          throw err;
+        }
+        // 404 means peer hasn't initiated yet
+      }
+
+      if (peerExchangeData && !peerExchangeData.keyConfirmation) {
+        // CASE A: Peer already initiated (and it's not a completed response). We act as RESPONDER.
+        console.log('✓ Peer has already initiated. Acting as RESPONDER.');
+        setKeyExchangeStatus('Responding to key exchange...');
+
+        const {
+          sessionKey,
+          ephemeralPublicKeyJwk,
+          signature,
+          keyConfirmation
+        } = await respondToKeyExchange(
+          selectedContact._id,
+          peerExchangeData.ephemeralPublicKeyJwk,
+          peerExchangeData.signature
+        );
+
+        // Publish our response
+        console.log('📤 Publishing response to server...');
+        await apiClient.post('/keys/exchange/initiate', {
+          targetUserId: selectedContact._id,
+          ephemeralPublicKeyJwk,
+          signature,
+          keyConfirmation
+        });
+
+        setKeyExchangeStatus('✓ Key exchange completed (Responder)!');
+        setHasSessionKey(true);
+        setLoading(false); // Ensure loading is reset
+        console.log('✓ Secure session established as Responder');
+
+      } else {
+        // CASE B: Peer hasn't initiated (or data is stale/completed). We act as INITIATOR.
+        console.log('✓ No active initiation found. Acting as INITIATOR.');
+        setKeyExchangeStatus('Initiating key exchange...');
+
+        const {
+          ephemeralKeyPair,
+          ephemeralPublicKeyJwk,
+          signature,
+          peerIdentityPublicKey
+        } = await initiateKeyExchange(selectedContact._id);
+
+        // Publish our initiation
+        console.log('📤 Publishing initiation to server...');
+        await apiClient.post('/keys/exchange/initiate', {
+          targetUserId: selectedContact._id,
+          ephemeralPublicKeyJwk,
+          signature
+        });
+
+        setKeyExchangeStatus('⏳ Waiting for peer to respond...');
+        console.log('⏳ Waiting for peer to respond...');
+        console.log('💡 Ask the other user to click "Start Key Exchange"');
+
+        // Poll for response
+        let attempts = 0;
+        const maxAttempts = 30; // 60 seconds
+
+        const pollInterval = setInterval(async () => {
+          attempts++;
+          try {
+            const response = await apiClient.get(`/keys/exchange/${selectedContact._id}`);
+            const responseData = response.data;
+
+            if (responseData) {
+              // Check for stale data (older than 2 minutes)
+              if (responseData.timestamp) {
+                const exchangeTime = new Date(responseData.timestamp).getTime();
+                const now = Date.now();
+                const twoMinutes = 2 * 60 * 1000;
+
+                if (now - exchangeTime > twoMinutes) {
+                  console.log('⚠️ Polling found stale data. Ignoring and waiting for fresh update...');
+                  return; // Skip this iteration
+                }
+              }
+
+              // Check if this is a response (contains keyConfirmation)
+              if (responseData.keyConfirmation) {
+                clearInterval(pollInterval);
+                console.log('✓ Received response from peer. Completing exchange...');
+                setKeyExchangeStatus('Completing key exchange...');
+
+                await completeKeyExchange(
+                  selectedContact._id,
+                  ephemeralKeyPair,
+                  responseData.ephemeralPublicKeyJwk,
+                  responseData.signature,
+                  responseData.keyConfirmation,
+                  peerIdentityPublicKey
+                );
+
+                setKeyExchangeStatus('✓ Key exchange completed (Initiator)!');
+                setHasSessionKey(true);
+                setLoading(false); // Ensure loading is reset
+                console.log('✓ Secure session established as Initiator');
+              }
+              // COLLISION HANDLING: Both initiated
+              else if (!responseData.keyConfirmation) {
+                console.log('⚠️ Collision detected: Peer also initiated.');
+
+                // Tie-breaker: Compare User IDs (lexicographical)
+                // If MyID < PeerID: I become RESPONDER
+                // If MyID > PeerID: I stay INITIATOR (wait for them to respond)
+
+                if (currentUserId < selectedContact._id) {
+                  console.log('🔄 Tie-breaker: Switching to RESPONDER role.');
+                  clearInterval(pollInterval);
+                  setKeyExchangeStatus('Switching to Responder...');
+
+                  const {
+                    sessionKey,
+                    ephemeralPublicKeyJwk: myRespPubKey,
+                    signature: myRespSig,
+                    keyConfirmation
+                  } = await respondToKeyExchange(
+                    selectedContact._id,
+                    responseData.ephemeralPublicKeyJwk,
+                    responseData.signature
+                  );
+
+                  // Publish our response (overwriting our previous initiation)
+                  console.log('📤 Publishing response to server...');
+                  await apiClient.post('/keys/exchange/initiate', {
+                    targetUserId: selectedContact._id,
+                    ephemeralPublicKeyJwk: myRespPubKey,
+                    signature: myRespSig,
+                    keyConfirmation
+                  });
+
+                  setKeyExchangeStatus('✓ Key exchange completed (Switched to Responder)!');
+                  setHasSessionKey(true);
+                  setLoading(false); // Ensure loading is reset
+                  console.log('✓ Secure session established (Switched to Responder)');
+                } else {
+                  console.log('⏳ Tie-breaker: Staying INITIATOR. Waiting for peer to switch...');
+                  // Do nothing, keep polling. Peer should switch and send response.
+                }
+              }
+            }
+          } catch (err) {
+            if (err.response?.status === 404) {
+              if (attempts >= maxAttempts) {
+                clearInterval(pollInterval);
+                setKeyExchangeStatus('⏱️ Timed out waiting for peer.');
+                setError('Peer did not respond in time.');
+                setLoading(false);
+              }
+            } else {
+              clearInterval(pollInterval);
+              console.error('Polling error:', err);
+            }
+          }
+        }, 2000);
+
+        // Cleanup
+        window.keyExchangePollInterval = pollInterval;
+      }
 
     } catch (err) {
       console.error('❌ Key exchange failed:', err);
       setError(`Key exchange failed: ${err.message}`);
       setKeyExchangeStatus('');
-    }
-  };
-
-  // Helper function to complete key derivation
-  const completeDerivedKey = async (peerExchangeData, myEphemeralKeyPair, peerIdentityPublicKey) => {
-    try {
-      console.log('\n[COMPLETING KEY EXCHANGE]');
-      
-      // Verify peer's signature
-      console.log('[7/9] Verifying peer\'s signature...');
-      const { verifySignature, base64ToSignature } = await import('../crypto/signing.js');
-      const peerEphemeralPubKeyString = JSON.stringify(peerExchangeData.ephemeralPublicKeyJwk);
-      const peerSignature = base64ToSignature(peerExchangeData.signature);
-      
-      const isValid = await verifySignature(peerIdentityPublicKey, peerEphemeralPubKeyString, peerSignature);
-      
-      if (!isValid) {
-        throw new Error('⚠️ SIGNATURE VERIFICATION FAILED! Possible MITM attack.');
+      setLoading(false);
+    } finally {
+      // Only set loading to false here if we didn't start polling
+      // If we started polling, the poll interval handles setLoading(false)
+      if (!window.keyExchangePollInterval && !loading) {
+        setLoading(false);
       }
-      console.log('✓ Peer signature verified - identity authenticated');
-
-      // Import peer's ephemeral public key
-      console.log('[8/9] Importing peer\'s ephemeral public key...');
-      const peerEphemeralPublicKey = await window.crypto.subtle.importKey(
-        'jwk',
-        peerExchangeData.ephemeralPublicKeyJwk,
-        { name: 'ECDH', namedCurve: 'P-256' },
-        true,
-        []
-      );
-
-      // Derive shared secret using ECDH
-      console.log('[9/9] Deriving shared secret and session key...');
-      const sharedSecretBits = await window.crypto.subtle.deriveBits(
-        {
-          name: 'ECDH',
-          public: peerEphemeralPublicKey
-        },
-        myEphemeralKeyPair.privateKey,
-        256
-      );
-
-      // Derive session key using HKDF
-      const sharedSecretKey = await window.crypto.subtle.importKey(
-        'raw',
-        sharedSecretBits,
-        'HKDF',
-        false,
-        ['deriveKey']
-      );
-
-      const encoder = new TextEncoder();
-      const sessionKey = await window.crypto.subtle.deriveKey(
-        {
-          name: 'HKDF',
-          hash: 'SHA-256',
-          salt: encoder.encode('secure-messaging-v1'),
-          info: encoder.encode('aes-gcm-session-key')
-        },
-        sharedSecretKey,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['encrypt', 'decrypt']
-      );
-
-      // Store session key
-      await saveSessionKey(selectedContact._id, sessionKey);
-      
-      // Update UI
-      setHasSessionKey(true);
-      setKeyExchangeStatus('✓ Secure session established!');
-      
-      console.log('\n═══════════════════════════════════════════════════════');
-      console.log('✅ SIGNED ECDH KEY EXCHANGE COMPLETE');
-      console.log('═══════════════════════════════════════════════════════');
-      console.log('✓ Shared secret derived via ECDH');
-      console.log('✓ Session key derived via HKDF-SHA256');
-      console.log('✓ Signatures verified - MITM protection active');
-      console.log('✓ Ready for AES-256-GCM encrypted messaging!');
-      console.log('═══════════════════════════════════════════════════════\n');
-
-      setTimeout(() => setKeyExchangeStatus(''), 3000);
-    } catch (err) {
-      console.error('❌ Key derivation failed:', err);
-      setError(`Key derivation failed: ${err.message}`);
-      setKeyExchangeStatus('');
     }
   };
 
@@ -484,14 +501,14 @@ function ChatPage() {
               <div className="chat-header-bar">
                 <h3>Chat with {selectedContact.username}</h3>
                 <div className="key-exchange-controls">
-                  <button 
+                  <button
                     onClick={handleUploadPublicKey}
                     className="key-exchange-btn"
                     title="Upload your public key to server"
                   >
                     📤 Upload Public Key
                   </button>
-                  <button 
+                  <button
                     onClick={handleStartKeyExchange}
                     className="key-exchange-btn"
                     disabled={loading}
@@ -567,4 +584,3 @@ function ChatPage() {
 }
 
 export default ChatPage;
-
