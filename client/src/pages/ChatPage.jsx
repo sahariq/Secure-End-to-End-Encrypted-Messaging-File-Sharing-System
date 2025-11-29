@@ -58,6 +58,8 @@ function ChatPage() {
     if (selectedContact && currentUserId) {
       loadMessages();
       checkSessionKeyStatus();
+      setKeyExchangeStatus(''); // Clear status when switching contacts
+      setError('');
     }
 
     // Cleanup polling interval on unmount
@@ -196,6 +198,7 @@ function ChatPage() {
       console.log('✓ Encrypted message sent to server');
 
       setMessageInput('');
+      setKeyExchangeStatus(''); // Clear status after sending message
       // Reload messages (will decrypt on display)
       await loadMessages();
     } catch (err) {
@@ -325,8 +328,11 @@ function ChatPage() {
 
         setKeyExchangeStatus('✓ Key exchange completed (Responder)!');
         setHasSessionKey(true);
-        setLoading(false); // Ensure loading is reset
+        setLoading(false);
         console.log('✓ Secure session established as Responder');
+
+        // Auto-hide success message
+        setTimeout(() => setKeyExchangeStatus(''), 5000);
 
       } else {
         // CASE B: Peer hasn't initiated (or data is stale/completed). We act as INITIATOR.
@@ -392,8 +398,11 @@ function ChatPage() {
 
                 setKeyExchangeStatus('✓ Key exchange completed (Initiator)!');
                 setHasSessionKey(true);
-                setLoading(false); // Ensure loading is reset
+                setLoading(false);
                 console.log('✓ Secure session established as Initiator');
+
+                // Auto-hide success message
+                setTimeout(() => setKeyExchangeStatus(''), 5000);
               }
               // COLLISION HANDLING: Both initiated
               else if (!responseData.keyConfirmation) {
@@ -430,8 +439,11 @@ function ChatPage() {
 
                   setKeyExchangeStatus('✓ Key exchange completed (Switched to Responder)!');
                   setHasSessionKey(true);
-                  setLoading(false); // Ensure loading is reset
+                  setLoading(false);
                   console.log('✓ Secure session established (Switched to Responder)');
+
+                  // Auto-hide success message
+                  setTimeout(() => setKeyExchangeStatus(''), 5000);
                 } else {
                   console.log('⏳ Tie-breaker: Staying INITIATOR. Waiting for peer to switch...');
                   // Do nothing, keep polling. Peer should switch and send response.
@@ -463,8 +475,6 @@ function ChatPage() {
       setKeyExchangeStatus('');
       setLoading(false);
     } finally {
-      // Only set loading to false here if we didn't start polling
-      // If we started polling, the poll interval handles setLoading(false)
       if (!window.keyExchangePollInterval && !loading) {
         setLoading(false);
       }
