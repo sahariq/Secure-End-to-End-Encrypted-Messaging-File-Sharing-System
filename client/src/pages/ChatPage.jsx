@@ -133,7 +133,7 @@ function ChatPage() {
               console.error('Failed to decrypt message:', decryptErr);
               return {
                 ...msg,
-                plaintext: '[Decryption failed - message may be corrupted]',
+                plaintext: '[Undecipherable: Key changed or message corrupted]',
                 decrypted: false
               };
             }
