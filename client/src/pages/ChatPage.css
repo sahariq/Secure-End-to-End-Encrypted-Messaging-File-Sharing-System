@@ -334,8 +334,14 @@
 
 /* Adjust sent message file attachment styles */
 .message.sent .file-attachment {
-  background-color: rgba(255, 255, 255, 0.2);
+  background-color: rgba(255, 255, 255, 0.9);
+  /* Light background for black text */
   border-color: rgba(255, 255, 255, 0.3);
+}
+
+.message.sent .file-info {
+  color: #333;
+  /* Black/Dark text as requested */
 }
 
 .message.sent .download-btn {
