@@ -19,8 +19,8 @@ router.post('/', async (req, res, next) => {
 
     // Validation
     if (!receiverId || !ciphertext || !iv) {
-      return res.status(400).json({ 
-        message: 'receiverId, ciphertext, and iv are required' 
+      return res.status(400).json({
+        message: 'receiverId, ciphertext, and iv are required'
       });
     }
 
@@ -65,18 +65,18 @@ router.get('/:conversationId', async (req, res, next) => {
   try {
     const { conversationId } = req.params;
     const currentUserId = req.user.userId;
-    
+
     // Parse conversation ID (format: userId1_userId2)
     const [userId1, userId2] = conversationId.split('_');
-    
+
     if (!userId1 || !userId2) {
       return res.status(400).json({ message: 'Invalid conversation ID format' });
     }
 
     // Verify that the authenticated user is part of this conversation
     if (currentUserId !== userId1 && currentUserId !== userId2) {
-      return res.status(403).json({ 
-        message: 'Access denied. You are not part of this conversation.' 
+      return res.status(403).json({
+        message: 'Access denied. You are not part of this conversation.'
       });
     }
 
@@ -87,9 +87,9 @@ router.get('/:conversationId', async (req, res, next) => {
         { senderId: userId2, receiverId: userId1 }
       ]
     })
-    .sort({ timestamp: 1 }) // Sort by timestamp ascending
-    .populate('senderId', 'username')
-    .populate('receiverId', 'username');
+      .sort({ timestamp: 1 }) // Sort by timestamp ascending
+      .populate('senderId', 'username')
+      .populate('receiverId', 'username');
 
     res.json({
       conversationId,
@@ -109,5 +109,42 @@ router.get('/:conversationId', async (req, res, next) => {
   }
 });
 
-export default router;
+// DELETE /api/messages/:conversationId
+// Protected route - requires valid JWT token
+// Clears all messages in a conversation
+router.delete('/:conversationId', async (req, res, next) => {
+  try {
+    const { conversationId } = req.params;
+    const currentUserId = req.user.userId;
 
+    // Parse conversation ID (format: userId1_userId2)
+    const [userId1, userId2] = conversationId.split('_');
+
+    if (!userId1 || !userId2) {
+      return res.status(400).json({ message: 'Invalid conversation ID format' });
+    }
+
+    // Verify that the authenticated user is part of this conversation
+    if (currentUserId !== userId1 && currentUserId !== userId2) {
+      return res.status(403).json({
+        message: 'Access denied. You are not part of this conversation.'
+      });
+    }
+
+    // Delete all messages between these two users
+    await Message.deleteMany({
+      $or: [
+        { senderId: userId1, receiverId: userId2 },
+        { senderId: userId2, receiverId: userId1 }
+      ]
+    });
+
+    console.log(`✓ Conversation cleared: ${userId1} <-> ${userId2}`);
+
+    res.json({ message: 'Conversation cleared successfully' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;

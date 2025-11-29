@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../utils/api';
 import {
@@ -10,7 +10,7 @@ import {
 } from '../crypto/keyExchange';
 import { getSessionKey, saveSessionKey } from '../crypto/sessionStore';
 import { loadKeyPair, loadSigningKeyPair, exportPublicKeyAsJWKString } from '../crypto/keyManager';
-import { encryptMessage, decryptMessage } from '../crypto/encryption';
+import { encryptMessage, decryptMessage, encryptFile, decryptFile } from '../crypto/encryption';
 import './ChatPage.css';
 
 function ChatPage() {
@@ -24,6 +24,7 @@ function ChatPage() {
   const [keyExchangeData, setKeyExchangeData] = useState(null); // Store initiation data
   const [contacts, setContacts] = useState([]); // Fetch real users from backend
   const navigate = useNavigate();
+  const fileInputRef = useRef(null);
 
   const currentUserId = localStorage.getItem('userId');
   const currentUsername = localStorage.getItem('username');
@@ -134,9 +135,25 @@ function ChatPage() {
           if (sessionKey) {
             try {
               const plaintext = await decryptMessage(sessionKey, msg.ciphertext, msg.iv);
+
+              // Check if message is a file metadata JSON
+              let isFile = false;
+              let fileData = null;
+              try {
+                const parsed = JSON.parse(plaintext);
+                if (parsed && parsed.type === 'file') {
+                  isFile = true;
+                  fileData = parsed;
+                }
+              } catch (e) {
+                // Not JSON, treat as regular text
+              }
+
               return {
                 ...msg,
-                plaintext, // Decrypted message
+                plaintext, // Decrypted message (or JSON string)
+                isFile,
+                fileData,
                 decrypted: true
               };
             } catch (decryptErr) {
@@ -216,6 +233,122 @@ function ChatPage() {
       setError(err.response?.data?.message || err.message || 'Failed to send message');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFileSelect = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !selectedContact || !currentUserId) return;
+
+    if (!hasSessionKey) {
+      setError('⚠️ No secure session established. Please run key exchange first.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setKeyExchangeStatus('Encrypting and uploading file...');
+
+    try {
+      const sessionKey = await getSessionKey(selectedContact._id);
+      if (!sessionKey) throw new Error('Session key not found');
+
+      console.log(`\n📂 Processing file: ${file.name} (${file.size} bytes)`);
+
+      // 1. Read file as ArrayBuffer
+      const fileBuffer = await file.arrayBuffer();
+
+      // 2. Encrypt file client-side
+      console.log('🔐 Encrypting file...');
+      const { encryptedBlob, ivBase64: fileIv } = await encryptFile(sessionKey, fileBuffer);
+      console.log(`✓ File encrypted. Blob size: ${encryptedBlob.size}`);
+
+      // 3. Upload encrypted blob
+      console.log('📤 Uploading encrypted blob...');
+      const formData = new FormData();
+      formData.append('file', encryptedBlob, 'encrypted_blob');
+      formData.append('receiverId', selectedContact._id);
+
+      const uploadRes = await apiClient.post('/files/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      const { fileId } = uploadRes.data;
+      console.log(`✓ Upload complete. File ID: ${fileId}`);
+
+      // 4. Send metadata message
+      const metadata = {
+        type: 'file',
+        fileId,
+        filename: file.name,
+        filesize: file.size,
+        fileIv
+      };
+
+      console.log('📨 Sending file metadata message...');
+      const { ciphertextBase64, ivBase64 } = await encryptMessage(sessionKey, JSON.stringify(metadata));
+
+      await apiClient.post('/messages', {
+        receiverId: selectedContact._id,
+        ciphertext: ciphertextBase64,
+        iv: ivBase64,
+        timestamp: new Date().toISOString()
+      });
+
+      console.log('✓ File sent successfully');
+      setKeyExchangeStatus('✓ File sent successfully');
+      setTimeout(() => setKeyExchangeStatus(''), 3000);
+
+      // Reset input
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      await loadMessages();
+
+    } catch (err) {
+      console.error('❌ File upload failed:', err);
+      setError(`File upload failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownloadFile = async (fileData) => {
+    try {
+      console.log(`\n⬇️ Downloading file: ${fileData.filename}`);
+      setKeyExchangeStatus(`Downloading ${fileData.filename}...`);
+
+      // 1. Fetch encrypted blob
+      const response = await apiClient.get(`/files/${fileData.fileId}`, {
+        responseType: 'arraybuffer'
+      });
+
+      const encryptedBuffer = response.data;
+      console.log(`✓ Downloaded ${encryptedBuffer.byteLength} bytes`);
+
+      // 2. Decrypt file
+      const sessionKey = await getSessionKey(selectedContact._id);
+      if (!sessionKey) throw new Error('Session key not found');
+
+      console.log('🔓 Decrypting file...');
+      const plaintextBuffer = await decryptFile(sessionKey, encryptedBuffer, fileData.fileIv);
+      console.log('✓ File decrypted successfully');
+
+      // 3. Trigger download
+      const blob = new Blob([plaintextBuffer]);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileData.filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      setKeyExchangeStatus('✓ Download complete');
+      setTimeout(() => setKeyExchangeStatus(''), 3000);
+
+    } catch (err) {
+      console.error('❌ Download failed:', err);
+      setError(`Download failed: ${err.message}`);
     }
   };
 
@@ -336,6 +469,13 @@ function ChatPage() {
           keyConfirmation
         });
 
+        // Clear conversation history on server and client
+        const userIds = [currentUserId, selectedContact._id].sort();
+        const conversationId = userIds.join('_');
+        await apiClient.delete(`/messages/${conversationId}`);
+        setMessages([]);
+        console.log('✓ Conversation history cleared for fresh start');
+
         setKeyExchangeStatus('✓ Key exchange completed (Responder)!');
         setHasSessionKey(true);
         setLoading(false);
@@ -406,6 +546,13 @@ function ChatPage() {
                   peerIdentityPublicKey
                 );
 
+                // Clear conversation history on server and client
+                const userIds = [currentUserId, selectedContact._id].sort();
+                const conversationId = userIds.join('_');
+                await apiClient.delete(`/messages/${conversationId}`);
+                setMessages([]);
+                console.log('✓ Conversation history cleared for fresh start');
+
                 setKeyExchangeStatus('✓ Key exchange completed (Initiator)!');
                 setHasSessionKey(true);
                 setLoading(false);
@@ -446,6 +593,13 @@ function ChatPage() {
                     signature: myRespSig,
                     keyConfirmation
                   });
+
+                  // Clear conversation history on server and client
+                  const userIds = [currentUserId, selectedContact._id].sort();
+                  const conversationId = userIds.join('_');
+                  await apiClient.delete(`/messages/${conversationId}`);
+                  setMessages([]);
+                  console.log('✓ Conversation history cleared for fresh start');
 
                   setKeyExchangeStatus('✓ Key exchange completed (Switched to Responder)!');
                   setHasSessionKey(true);
@@ -567,7 +721,23 @@ function ChatPage() {
                       </div>
                       <div className="message-content">
                         {msg.decrypted ? (
-                          <>{msg.plaintext}</>
+                          msg.isFile ? (
+                            <div className="file-attachment">
+                              <div className="file-info">
+                                <span className="file-icon">📄</span>
+                                <span className="file-name">{msg.fileData.filename}</span>
+                                <span className="file-size">({Math.round(msg.fileData.filesize / 1024)} KB)</span>
+                              </div>
+                              <button
+                                onClick={() => handleDownloadFile(msg.fileData)}
+                                className="download-btn"
+                              >
+                                ⬇️ Download & Decrypt
+                              </button>
+                            </div>
+                          ) : (
+                            <>{msg.plaintext}</>
+                          )
                         ) : (
                           <span className="encrypted-placeholder">
                             {msg.plaintext}
@@ -581,6 +751,21 @@ function ChatPage() {
               <form onSubmit={handleSendMessage} className="message-input-form">
                 {error && <div className="error-message">{error}</div>}
                 <div className="input-group">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileSelect}
+                    style={{ display: 'none' }}
+                  />
+                  <button
+                    type="button"
+                    className="attach-btn"
+                    onClick={() => fileInputRef.current.click()}
+                    disabled={loading || !hasSessionKey}
+                    title="Send encrypted file"
+                  >
+                    📎
+                  </button>
                   <input
                     type="text"
                     value={messageInput}

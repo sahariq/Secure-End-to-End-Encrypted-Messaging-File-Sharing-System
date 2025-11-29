@@ -268,3 +268,76 @@
   font-size: 0.9rem;
 }
 
+
+/* File Sharing Styles */
+.attach-btn {
+  padding: 0.75rem 1rem;
+  background-color: #e0e0e0;
+  color: #555;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: background-color 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attach-btn:hover:not(:disabled) {
+  background-color: #d0d0d0;
+}
+
+.file-attachment {
+  background-color: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.file-icon {
+  font-size: 1.2rem;
+}
+
+.file-size {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  font-weight: normal;
+}
+
+.download-btn {
+  padding: 0.5rem;
+  background-color: white;
+  color: #333;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+
+.download-btn:hover {
+  background-color: #f0f0f0;
+  border-color: #bbb;
+}
+
+/* Adjust sent message file attachment styles */
+.message.sent .file-attachment {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.message.sent .download-btn {
+  color: #667eea;
+}

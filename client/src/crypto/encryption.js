@@ -223,7 +223,7 @@ export const decryptMessage = async (sessionKey, ciphertextBase64, ivBase64) => 
       console.error('❌ Decryption failed: Authentication tag verification failed');
       throw new Error('Decryption failed: Message may have been tampered with or wrong key used');
     }
-    
+
     console.error('❌ Decryption failed:', error);
     throw new Error(`Failed to decrypt message: ${error.message}`);
   }
@@ -240,18 +240,18 @@ export const decryptMessage = async (sessionKey, ciphertextBase64, ivBase64) => 
 export const testEncryption = async (sessionKey) => {
   try {
     const testMessage = 'Hello, this is a test message! 🔐';
-    
+
     console.log('Testing encryption/decryption...');
     console.log(`Test message: "${testMessage}"`);
-    
+
     // Encrypt
     const { ciphertextBase64, ivBase64 } = await encryptMessage(sessionKey, testMessage);
     console.log('✓ Encryption successful');
-    
+
     // Decrypt
     const decrypted = await decryptMessage(sessionKey, ciphertextBase64, ivBase64);
     console.log('✓ Decryption successful');
-    
+
     // Verify
     const success = decrypted === testMessage;
     if (success) {
@@ -261,10 +261,72 @@ export const testEncryption = async (sessionKey) => {
       console.error(`  Original: "${testMessage}"`);
       console.error(`  Decrypted: "${decrypted}"`);
     }
-    
+
     return success;
   } catch (error) {
     console.error('❌ Encryption test FAILED:', error);
     return false;
+  }
+};
+/**
+ * Encrypt a file (ArrayBuffer) using AES-256-GCM
+ * 
+ * Process:
+ * 1. Generate fresh IV
+ * 2. Encrypt the buffer directly
+ * 3. Return the encrypted buffer (for upload) and IV (for metadata)
+ * 
+ * @param {CryptoKey} sessionKey 
+ * @param {ArrayBuffer} fileBuffer 
+ * @returns {Promise<{encryptedBlob: Blob, ivBase64: string}>}
+ */
+export const encryptFile = async (sessionKey, fileBuffer) => {
+  try {
+    const iv = generateIV();
+
+    const ciphertextBuffer = await window.crypto.subtle.encrypt(
+      {
+        name: 'AES-GCM',
+        iv: iv
+      },
+      sessionKey,
+      fileBuffer
+    );
+
+    const encryptedBlob = new Blob([ciphertextBuffer], { type: 'application/octet-stream' });
+    const ivBase64 = arrayBufferToBase64(iv);
+
+    return { encryptedBlob, ivBase64 };
+  } catch (error) {
+    console.error('❌ File encryption failed:', error);
+    throw new Error(`Failed to encrypt file: ${error.message}`);
+  }
+};
+
+/**
+ * Decrypt a file (ArrayBuffer) using AES-256-GCM
+ * 
+ * @param {CryptoKey} sessionKey 
+ * @param {ArrayBuffer} encryptedBuffer 
+ * @param {string} ivBase64 
+ * @returns {Promise<ArrayBuffer>} Decrypted file buffer
+ */
+export const decryptFile = async (sessionKey, encryptedBuffer, ivBase64) => {
+  try {
+    const iv = base64ToArrayBuffer(ivBase64);
+
+    const plaintextBuffer = await window.crypto.subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv: iv
+      },
+      sessionKey,
+      encryptedBuffer
+    );
+
+    return plaintextBuffer;
+  } catch (error) {
+    console.error('❌ File decryption failed:', error);
+    throw new Error(`Failed to decrypt file: ${error.message}`);
   }
 };
