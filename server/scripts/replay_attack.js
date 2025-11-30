@@ -30,8 +30,8 @@ const runAttackSimulation = async () => {
     try {
         console.log('🚀 Starting Replay Attack Simulation...');
 
-        // 1. Register User A (Attacker/Victim)
-        const username = `user_${Date.now()}`;
+        // 1. Register Amitabh Bachan (Victim)
+        const username = `amitabh_bachan_${Date.now()}`;
         const password = 'password123';
 
         console.log(`\n1. Registering User: ${username}`);
@@ -42,7 +42,7 @@ const runAttackSimulation = async () => {
         const token = loginRes.data.token;
         const userId = loginRes.data.userId;
         const authHeaders = { headers: { Authorization: `Bearer ${token}` } };
-        console.log('✓ Logged in');
+        console.log('✓ Logged in as Amitabh Bachan');
 
         // 3. Upload Public Key
         console.log('\n2. Uploading Identity Public Key...');
@@ -56,7 +56,7 @@ const runAttackSimulation = async () => {
         console.log('✓ Public Key Uploaded');
 
         // 4. Send Valid Message
-        console.log('\n3. Sending VALID Message...');
+        console.log('\n3. Amitabh sends VALID Message...');
         const nonce = crypto.randomBytes(16).toString('hex');
         const timestamp = new Date().toISOString();
         const sequenceNumber = 1;
@@ -81,7 +81,7 @@ const runAttackSimulation = async () => {
         console.log(`✓ Valid message accepted (ID: ${validMsgRes.data.messageId})`);
 
         // 5. REPLAY ATTACK: Resend exact same payload
-        console.log('\n4. Executing REPLAY ATTACK (Same Payload)...');
+        console.log('\n4. Dobby Deol executes REPLAY ATTACK (Same Payload)...');
         try {
             await axios.post(`${API_URL}/messages`, {
                 ...payload,
@@ -98,7 +98,7 @@ const runAttackSimulation = async () => {
         }
 
         // 6. OLD TIMESTAMP ATTACK
-        console.log('\n5. Executing OLD TIMESTAMP ATTACK...');
+        console.log('\n5. Dobby Deol executes OLD TIMESTAMP ATTACK...');
         const oldTimestamp = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 mins ago
         const oldNonce = crypto.randomBytes(16).toString('hex');
 
@@ -126,7 +126,7 @@ const runAttackSimulation = async () => {
         }
 
         // 7. SEQUENCE NUMBER ATTACK (Reusing Seq 1)
-        console.log('\n6. Executing SEQUENCE NUMBER ATTACK (Reusing Seq 1)...');
+        console.log('\n6. Dobby Deol executes SEQUENCE NUMBER ATTACK (Reusing Seq 1)...');
         const newNonce = crypto.randomBytes(16).toString('hex');
         const newTimestamp = new Date().toISOString();
 
