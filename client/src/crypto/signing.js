@@ -165,7 +165,6 @@ export const signObject = async (privateKey, obj) => {
   try {
     // Serialize to JSON string using canonicalization
     const jsonString = canonicalize(obj);
-    console.log('Client signing payload:', jsonString); // DEBUG LOG
     return await signMessage(privateKey, jsonString);
   } catch (error) {
     throw new Error(`Failed to sign object: ${error.message}`);

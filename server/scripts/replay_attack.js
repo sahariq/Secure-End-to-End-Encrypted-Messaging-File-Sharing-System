@@ -18,12 +18,30 @@ const pemToJwk = (pem) => {
     return key.export({ format: 'jwk' });
 };
 
+// Helper to canonicalize object for signing
+const canonicalize = (obj) => {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+        return JSON.stringify(obj);
+    }
+    const keys = Object.keys(obj).sort();
+    const result = {};
+    for (const key of keys) {
+        result[key] = obj[key];
+    }
+    return JSON.stringify(result);
+};
+
 // Helper to sign data
 const signData = (privateKeyPem, data) => {
     const sign = crypto.createSign('SHA256');
-    sign.update(JSON.stringify(data));
+    // Use canonicalization to match server expectation
+    sign.update(canonicalize(data));
     sign.end();
-    return sign.sign(privateKeyPem, 'base64');
+    // Use IEEE-P1363 encoding to match server expectation
+    return sign.sign({
+        key: privateKeyPem,
+        dsaEncoding: 'ieee-p1363'
+    }, 'base64');
 };
 
 const runAttackSimulation = async () => {

@@ -77,7 +77,6 @@ export const verifyObjectSignature = (jwk, obj, signatureBase64) => {
     try {
         // Use canonical serialization to match client
         const jsonString = canonicalize(obj);
-        console.log('Server verifying payload:', jsonString); // DEBUG LOG
         return verifySignature(jwk, jsonString, signatureBase64);
     } catch (error) {
         console.error('Object verification failed:', error);
