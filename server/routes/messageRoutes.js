@@ -1,6 +1,10 @@
 import express from 'express';
 import Message from '../models/Message.js';
 import { authenticate } from '../middleware/authMiddleware.js';
+import ReplayLog from '../models/ReplayLog.js';
+import ConversationState from '../models/ConversationState.js';
+import PublicKey from '../models/PublicKey.js';
+import { verifyObjectSignature } from '../utils/cryptoUtils.js';
 
 const router = express.Router();
 
@@ -15,12 +19,20 @@ router.post('/', async (req, res, next) => {
   try {
     // Use authenticated user's ID from token
     const senderId = req.user.userId;
-    const { receiverId, ciphertext, iv, timestamp } = req.body;
+    const {
+      receiverId,
+      ciphertext,
+      iv,
+      nonce,
+      timestamp,
+      sequenceNumber,
+      signature
+    } = req.body;
 
-    // Validation
-    if (!receiverId || !ciphertext || !iv) {
+    // 1. Validation of required fields
+    if (!receiverId || !ciphertext || !iv || !nonce || !timestamp || !sequenceNumber || !signature) {
       return res.status(400).json({
-        message: 'receiverId, ciphertext, and iv are required'
+        message: 'Missing required fields: receiverId, ciphertext, iv, nonce, timestamp, sequenceNumber, signature'
       });
     }
 
@@ -31,19 +43,108 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    // Create message metadata (ciphertext only)
+    // 2. Timestamp Check (Replay Protection)
+    // Reject messages older than 5 minutes or from the future (allow 1 min drift)
+    const msgTime = new Date(timestamp).getTime();
+    const now = Date.now();
+    const fiveMinutes = 5 * 60 * 1000;
+
+    if (now - msgTime > fiveMinutes) {
+      return res.status(400).json({ message: 'Message expired (timestamp too old)' });
+    }
+    if (msgTime - now > 60 * 1000) {
+      return res.status(400).json({ message: 'Invalid timestamp (in the future)' });
+    }
+
+    // 3. Nonce Check (Replay Protection)
+    // Check if this nonce has been used recently
+    const existingNonce = await ReplayLog.findOne({ nonce });
+    if (existingNonce) {
+      console.warn(`⚠️ Replay attack detected! Nonce reused: ${nonce}`);
+      return res.status(403).json({ message: 'Replay detected: Nonce already used' });
+    }
+
+    // 4. Signature Verification (Integrity + Authenticity)
+    // Fetch sender's public key
+    const senderKey = await PublicKey.findOne({ userId: senderId });
+    if (!senderKey) {
+      return res.status(400).json({ message: 'Sender public key not found. Please register keys first.' });
+    }
+
+    // Construct the payload object that was signed
+    // MUST match the client's structure exactly
+    const payloadToVerify = {
+      senderId,
+      receiverId,
+      ciphertext,
+      iv,
+      nonce,
+      timestamp,
+      sequenceNumber
+    };
+
+    const isValid = verifyObjectSignature(
+      JSON.parse(senderKey.publicKeyJwk),
+      payloadToVerify,
+      signature
+    );
+
+    if (!isValid) {
+      console.warn(`⚠️ Invalid signature from user ${senderId}`);
+      return res.status(403).json({ message: 'Invalid signature: Message integrity check failed' });
+    }
+
+    // 5. Sequence Number Check (Reordering/Replay Protection)
+    // Get the last sequence number for this conversation direction
+    let convState = await ConversationState.findOne({ senderId, receiverId });
+
+    if (!convState) {
+      // First message in this direction, initialize state
+      // We accept sequenceNumber 1 (or whatever start value)
+      // For robustness, we might just set it to current - 1 if it's the first one?
+      // Or strictly enforce 1? Let's enforce > 0.
+      convState = new ConversationState({
+        senderId,
+        receiverId,
+        lastSequenceNumber: 0
+      });
+    }
+
+    if (sequenceNumber <= convState.lastSequenceNumber) {
+      console.warn(`⚠️ Replay/Reorder detected! Seq ${sequenceNumber} <= Last ${convState.lastSequenceNumber}`);
+      return res.status(403).json({
+        message: `Invalid sequence number. Expected > ${convState.lastSequenceNumber}, got ${sequenceNumber}`
+      });
+    }
+
+    // 6. Persist Everything (Atomic-ish)
+
+    // Save message
     const message = new Message({
       senderId,
       receiverId,
       ciphertext,
       iv,
-      timestamp: timestamp || new Date()
+      nonce,
+      sequenceNumber,
+      signature,
+      timestamp: new Date(timestamp)
     });
-
     await message.save();
 
+    // Save nonce to replay log
+    await ReplayLog.create({
+      nonce,
+      senderId
+    });
+
+    // Update conversation state
+    convState.lastSequenceNumber = sequenceNumber;
+    convState.updatedAt = new Date();
+    await convState.save();
+
     // DO NOT log ciphertext or IV to console (security best practice)
-    console.log(`✓ Encrypted message stored: ${senderId} -> ${receiverId}`);
+    console.log(`✓ Secure message stored: ${senderId} -> ${receiverId} (Seq: ${sequenceNumber})`);
 
     res.status(201).json({
       message: 'Message stored successfully',
@@ -101,6 +202,9 @@ router.get('/:conversationId', async (req, res, next) => {
         receiverUsername: msg.receiverId.username || null,
         ciphertext: msg.ciphertext,
         iv: msg.iv,
+        nonce: msg.nonce,
+        sequenceNumber: msg.sequenceNumber,
+        signature: msg.signature,
         timestamp: msg.timestamp
       }))
     });

@@ -12,9 +12,10 @@
  */
 
 const DB_NAME = 'secureKeysDB';
-const DB_VERSION = 2; // Version 2: Added sessionKeys store
+const DB_VERSION = 3; // Version 3: Added sequenceNumbers store
 const STORE_NAME = 'keys';
 const SESSION_STORE_NAME = 'sessionKeys';
+const SEQUENCE_STORE_NAME = 'sequenceNumbers';
 
 /**
  * Open or create the IndexedDB database
@@ -34,7 +35,7 @@ export const openDB = () => {
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
-      
+
       // Create keys store if it doesn't exist (STEP 3 - Identity keys)
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         const objectStore = db.createObjectStore(STORE_NAME, { keyPath: 'name' });
@@ -47,6 +48,12 @@ export const openDB = () => {
         const sessionStore = db.createObjectStore(SESSION_STORE_NAME, { keyPath: 'peerId' });
         // Index by peer user ID for fast lookups
         sessionStore.createIndex('peerId', 'peerId', { unique: true });
+      }
+
+      // Create sequence numbers store if it doesn't exist (STEP 7 - Replay Protection)
+      if (!db.objectStoreNames.contains(SEQUENCE_STORE_NAME)) {
+        const seqStore = db.createObjectStore(SEQUENCE_STORE_NAME, { keyPath: 'peerId' });
+        seqStore.createIndex('peerId', 'peerId', { unique: true });
       }
     };
   });
@@ -61,11 +68,11 @@ export const openDB = () => {
 export const saveKey = async (name, cryptoKey) => {
   try {
     const db = await openDB();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([STORE_NAME], 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
-      
+
       // Use structuredClone to store the CryptoKey
       // Note: structuredClone is available in modern browsers
       // and can handle CryptoKey objects
@@ -105,7 +112,7 @@ export const saveKey = async (name, cryptoKey) => {
 export const getKey = async (name) => {
   try {
     const db = await openDB();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([STORE_NAME], 'readonly');
       const store = transaction.objectStore(STORE_NAME);
@@ -139,7 +146,7 @@ export const getKey = async (name) => {
 export const deleteKey = async (name) => {
   try {
     const db = await openDB();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([STORE_NAME], 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
@@ -168,7 +175,7 @@ export const deleteKey = async (name) => {
 export const clearAllKeys = async () => {
   try {
     const db = await openDB();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([STORE_NAME], 'readwrite');
       const store = transaction.objectStore(STORE_NAME);

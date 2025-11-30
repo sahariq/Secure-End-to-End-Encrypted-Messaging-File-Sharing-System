@@ -21,6 +21,22 @@ const messageSchema = new mongoose.Schema({
     required: true
     // Initialization vector for encryption
   },
+  nonce: {
+    type: String,
+    required: true,
+    unique: true
+    // Random value to prevent replay attacks
+  },
+  sequenceNumber: {
+    type: Number,
+    required: true
+    // Monotonically increasing counter per conversation direction
+  },
+  signature: {
+    type: String,
+    required: true
+    // Digital signature of the payload (integrity + authenticity)
+  },
   timestamp: {
     type: Date,
     default: Date.now,

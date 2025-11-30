@@ -18,6 +18,7 @@
 import { openDB } from './indexedDB.js';
 
 const SESSION_STORE_NAME = 'sessionKeys';
+const SEQUENCE_STORE_NAME = 'sequenceNumbers';
 
 /**
  * Save a session key for a specific peer
@@ -37,11 +38,11 @@ export const saveSessionKey = async (peerId, sessionKey) => {
     }
 
     const db = await openDB();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([SESSION_STORE_NAME], 'readwrite');
       const store = transaction.objectStore(SESSION_STORE_NAME);
-      
+
       const sessionData = {
         peerId: peerId,
         key: sessionKey,
@@ -85,7 +86,7 @@ export const getSessionKey = async (peerId) => {
     }
 
     const db = await openDB();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([SESSION_STORE_NAME], 'readonly');
       const store = transaction.objectStore(SESSION_STORE_NAME);
@@ -131,7 +132,7 @@ export const deleteSessionKey = async (peerId) => {
     }
 
     const db = await openDB();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([SESSION_STORE_NAME], 'readwrite');
       const store = transaction.objectStore(SESSION_STORE_NAME);
@@ -166,7 +167,7 @@ export const deleteSessionKey = async (peerId) => {
 export const clearAllSessionKeys = async () => {
   try {
     const db = await openDB();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([SESSION_STORE_NAME], 'readwrite');
       const store = transaction.objectStore(SESSION_STORE_NAME);
@@ -200,6 +201,86 @@ export const hasSessionKey = async (peerId) => {
     return key !== null;
   } catch (error) {
     console.error('Error checking session key existence:', error);
+    return false;
+  }
+};
+/**
+ * Get the next sequence number for sending to a peer
+ * 
+ * @param {string} peerId 
+ * @returns {Promise<number>} The next sequence number (increments automatically)
+ */
+export const getNextSequenceNumber = async (peerId) => {
+  try {
+    const db = await openDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([SEQUENCE_STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(SEQUENCE_STORE_NAME);
+      const request = store.get(peerId);
+
+      request.onsuccess = () => {
+        let data = request.result;
+        if (!data) {
+          data = { peerId, lastSent: 0, lastReceived: 0 };
+        }
+
+        // Increment sent counter
+        data.lastSent += 1;
+        const nextSeq = data.lastSent;
+
+        // Save back
+        store.put(data);
+        resolve(nextSeq);
+      };
+
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    throw new Error(`Failed to get sequence number: ${error.message}`);
+  }
+};
+
+/**
+ * Verify and update received sequence number
+ * 
+ * @param {string} peerId 
+ * @param {number} sequenceNumber 
+ * @returns {Promise<boolean>} True if valid (new), False if replay/old
+ */
+export const verifyReceivedSequenceNumber = async (peerId, sequenceNumber) => {
+  try {
+    const db = await openDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([SEQUENCE_STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(SEQUENCE_STORE_NAME);
+      const request = store.get(peerId);
+
+      request.onsuccess = () => {
+        let data = request.result;
+        if (!data) {
+          data = { peerId, lastSent: 0, lastReceived: 0 };
+        }
+
+        // Check if replay (assuming strict ordering for now, or at least > last)
+        // For simple replay protection, just needs to be > lastReceived
+        if (sequenceNumber <= data.lastReceived) {
+          console.warn(`Replay detected! Seq ${sequenceNumber} <= Last ${data.lastReceived}`);
+          resolve(false);
+          return;
+        }
+
+        // Valid - update lastReceived
+        data.lastReceived = sequenceNumber;
+        store.put(data);
+        resolve(true);
+      };
+
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.error('Sequence verification error:', error);
     return false;
   }
 };
