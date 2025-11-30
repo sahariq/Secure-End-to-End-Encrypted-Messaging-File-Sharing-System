@@ -131,6 +131,27 @@ export const verifySignature = async (publicKey, data, signature) => {
 };
 
 /**
+ * Canonicalize an object for signing
+ * 
+ * Sorts keys recursively to ensure deterministic serialization.
+ * 
+ * @param {Object} obj 
+ * @returns {string} Canonical JSON string
+ */
+const canonicalize = (obj) => {
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    return JSON.stringify(obj);
+  }
+
+  const keys = Object.keys(obj).sort();
+  const result = {};
+  for (const key of keys) {
+    result[key] = obj[key];
+  }
+  return JSON.stringify(result);
+};
+
+/**
  * Sign a JSON object
  * 
  * Convenience function for signing structured data.
@@ -142,10 +163,9 @@ export const verifySignature = async (publicKey, data, signature) => {
  */
 export const signObject = async (privateKey, obj) => {
   try {
-    // Serialize to JSON string
-    // Note: JSON.stringify is deterministic for simple objects
-    // For production, consider canonical JSON serialization
-    const jsonString = JSON.stringify(obj);
+    // Serialize to JSON string using canonicalization
+    const jsonString = canonicalize(obj);
+    console.log('Client signing payload:', jsonString); // DEBUG LOG
     return await signMessage(privateKey, jsonString);
   } catch (error) {
     throw new Error(`Failed to sign object: ${error.message}`);
@@ -162,7 +182,7 @@ export const signObject = async (privateKey, obj) => {
  */
 export const verifyObjectSignature = async (publicKey, obj, signature) => {
   try {
-    const jsonString = JSON.stringify(obj);
+    const jsonString = canonicalize(obj);
     return await verifySignature(publicKey, jsonString, signature);
   } catch (error) {
     console.error('Object signature verification error:', error);

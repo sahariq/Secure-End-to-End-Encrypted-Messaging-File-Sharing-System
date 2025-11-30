@@ -1,5 +1,6 @@
 import express from 'express';
 import PublicKey from '../models/PublicKey.js';
+import ConversationState from '../models/ConversationState.js';
 import { authenticate } from '../middleware/authMiddleware.js';
 
 /**
@@ -236,6 +237,17 @@ router.post('/exchange/initiate', authenticate, async (req, res, next) => {
       keyConfirmation, // Optional: only present in response
       timestamp: Date.now()
     });
+
+    // Reset ConversationState for this pair (both directions) to allow fresh sequence numbers
+    // This is critical because the client resets its sequence number to 0 on new key exchange.
+    // If we don't reset here, the server will reject the new messages (Seq 1) as replays (Seq 1 <= OldSeq).
+    await ConversationState.deleteMany({
+      $or: [
+        { senderId: initiatorUserId, receiverId: targetUserId },
+        { senderId: targetUserId, receiverId: initiatorUserId }
+      ]
+    });
+    console.log(`✓ Conversation state reset for ${initiatorUserId} <-> ${targetUserId}`);
 
     console.log(`✓ Key exchange initiated: ${initiatorUserId} → ${targetUserId}`);
 

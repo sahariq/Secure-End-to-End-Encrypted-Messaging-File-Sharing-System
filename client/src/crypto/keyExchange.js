@@ -72,7 +72,9 @@
 
 import { loadKeyPair, loadSigningKeyPair } from './keyManager.js';
 import { signMessage, verifySignature, signatureToBase64, base64ToSignature } from './signing.js';
-import { saveSessionKey, getSessionKey } from './sessionStore.js';
+import { saveSessionKey, getSessionKey, clearSequenceNumbers } from './sessionStore.js';
+
+
 import { encryptMessage, decryptMessage } from './encryption.js';
 import apiClient from '../utils/api.js';
 
@@ -117,7 +119,7 @@ export const requestPublicKeyFromServer = async (userId) => {
     }
 
     const response = await apiClient.get(`/keys/${userId}`);
-    
+
     if (!response.data || !response.data.publicKeyJwk) {
       throw new Error('Peer has not uploaded their public key yet');
     }
@@ -309,7 +311,7 @@ export const initiateKeyExchange = async (peerUserId) => {
 
     // STEP 4: Sign ephemeral public key (SPKI bytes) with identity signing private key
     console.log('[4/6] Signing ephemeral public key (SPKI)...');
-    
+
     // We sign the SPKI bytes directly to avoid JSON serialization issues
     const signature = await signMessage(mySigningKeys.privateKey, ephemeralPublicKeySpki);
     const signatureBase64 = signatureToBase64(signature);
@@ -382,9 +384,9 @@ export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJw
       'spki',
       peerEphemeralPublicKey
     );
-    
+
     const receivedSignature = base64ToSignature(receivedSignatureBase64);
-    
+
     const isSignatureValid = await verifySignature(
       peerIdentityPublicKey,
       peerEphemeralPublicKeySpki,
@@ -413,12 +415,13 @@ export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJw
 
     // STEP 7: Store session key in IndexedDB
     console.log('[7/9] Storing session key in IndexedDB...');
+    await clearSequenceNumbers(peerUserId);
     await saveSessionKey(peerUserId, sessionKey);
 
     // STEP 8: Sign my ephemeral public key (SPKI)
     console.log('[8/9] Signing my ephemeral public key...');
     const mySigningKeys = await loadSigningKeyPair();
-    
+
     // Export to SPKI for signing
     const myEphemeralPublicKeySpki = await window.crypto.subtle.exportKey(
       'spki',
@@ -429,7 +432,7 @@ export const respondToKeyExchange = async (peerUserId, receivedEphemeralPubKeyJw
       'jwk',
       myEphemeralKeyPair.publicKey
     );
-    
+
     const mySignature = await signMessage(mySigningKeys.privateKey, myEphemeralPublicKeySpki);
     const mySignatureBase64 = signatureToBase64(mySignature);
 
@@ -505,9 +508,9 @@ export const completeKeyExchange = async (
       'spki',
       peerEphemeralPublicKey
     );
-    
+
     const receivedSignature = base64ToSignature(receivedSignatureBase64);
-    
+
     const isSignatureValid = await verifySignature(
       peerIdentityPublicKey,
       peerEphemeralPublicKeySpki,
@@ -535,14 +538,14 @@ export const completeKeyExchange = async (
     if (!keyConfirmation || !keyConfirmation.ciphertextBase64 || !keyConfirmation.ivBase64) {
       throw new Error('Missing Key Confirmation data');
     }
-    
+
     try {
       const confirmationPlaintext = await decryptMessage(
-        sessionKey, 
-        keyConfirmation.ciphertextBase64, 
+        sessionKey,
+        keyConfirmation.ciphertextBase64,
         keyConfirmation.ivBase64
       );
-      
+
       if (confirmationPlaintext !== "Key Confirmation") {
         throw new Error('Key Confirmation message mismatch');
       }
@@ -553,6 +556,7 @@ export const completeKeyExchange = async (
 
     // STEP 6: Store session key in IndexedDB
     console.log('[6/6] Storing session key in IndexedDB...');
+    await clearSequenceNumbers(peerUserId);
     await saveSessionKey(peerUserId, sessionKey);
 
     console.log('\n✓ Key exchange completed successfully!');

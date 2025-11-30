@@ -46,8 +46,18 @@ export const saveSessionKey = async (peerId, sessionKey) => {
       const sessionData = {
         peerId: peerId,
         key: sessionKey,
+        key: sessionKey,
         timestamp: Date.now() // Track when key was established
       };
+
+      // Reset sequence numbers for this new session
+      // We do this implicitly by deleting the old record
+      // Note: This is async but we don't strictly need to wait for it to block the UI
+      // But for correctness, let's do it.
+      // Actually, we can't easily await inside this transaction callback structure without nesting.
+      // Let's just rely on the caller to clear it, OR do it here if we change structure.
+      // Better: The caller (keyExchange.js) knows when a NEW session is starting.
+
 
       const request = store.put(sessionData);
 
@@ -282,5 +292,30 @@ export const verifyReceivedSequenceNumber = async (peerId, sequenceNumber) => {
   } catch (error) {
     console.error('Sequence verification error:', error);
     return false;
+  }
+};
+/**
+ * Clear sequence numbers for a peer
+ * 
+ * Use when resetting a session (e.g., new key exchange)
+ * 
+ * @param {string} peerId 
+ */
+export const clearSequenceNumbers = async (peerId) => {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([SEQUENCE_STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(SEQUENCE_STORE_NAME);
+      const request = store.delete(peerId);
+
+      request.onsuccess = () => {
+        console.log(`Sequence numbers cleared for peer: ${peerId}`);
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.error('Error clearing sequence numbers:', error);
   }
 };
