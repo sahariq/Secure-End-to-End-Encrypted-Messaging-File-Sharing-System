@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import User from '../models/User.js';
 import { generateJWT } from '../utils/jwt.js';
 import { authenticate } from '../middleware/authMiddleware.js';
+import { logEvent } from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -26,6 +27,14 @@ router.post('/register', async (req, res, next) => {
     // Check if user already exists
     const existingUser = await User.findOne({ username });
     if (existingUser) {
+      logEvent({
+        eventType: 'REGISTER_ATTEMPT',
+        status: 'FAILURE',
+        username,
+        details: { reason: 'Username already exists' },
+        req,
+        severity: 'WARNING'
+      });
       return res.status(409).json({ message: 'Username already exists' });
     }
 
@@ -39,6 +48,14 @@ router.post('/register', async (req, res, next) => {
     });
 
     await user.save();
+
+    logEvent({
+      eventType: 'REGISTER_ATTEMPT',
+      status: 'SUCCESS',
+      userId: user._id,
+      username: user.username,
+      req
+    });
 
     res.status(201).json({
       message: 'User registered successfully',
@@ -63,6 +80,14 @@ router.post('/login', async (req, res, next) => {
     // Find user
     const user = await User.findOne({ username });
     if (!user) {
+      logEvent({
+        eventType: 'LOGIN_ATTEMPT',
+        status: 'FAILURE',
+        username,
+        details: { reason: 'User not found' },
+        req,
+        severity: 'WARNING'
+      });
       // Use generic message to prevent username enumeration
       return res.status(401).json({ message: 'Invalid credentials' });
     }
@@ -70,11 +95,28 @@ router.post('/login', async (req, res, next) => {
     // Verify password using bcrypt
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
+      logEvent({
+        eventType: 'LOGIN_ATTEMPT',
+        status: 'FAILURE',
+        userId: user._id,
+        username: user.username,
+        details: { reason: 'Invalid password' },
+        req,
+        severity: 'WARNING'
+      });
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     // Generate JWT token
     const token = generateJWT(user._id);
+
+    logEvent({
+      eventType: 'LOGIN_ATTEMPT',
+      status: 'SUCCESS',
+      userId: user._id,
+      username: user.username,
+      req
+    });
 
     res.json({
       message: 'Login successful',
@@ -90,13 +132,22 @@ router.post('/login', async (req, res, next) => {
 // GET /api/auth/users - Get all users except current user
 router.get('/users', authenticate, async (req, res, next) => {
   try {
-    const currentUserId = req.userId; // From JWT token
+    const currentUserId = req.user.userId; // Fixed: req.user.userId not req.userId
 
     // Find all users except the current user
     const users = await User.find(
       { _id: { $ne: currentUserId } },
       'username _id' // Only return username and _id
     ).sort({ username: 1 });
+
+    // Optional: Log metadata access (can be noisy)
+    // logEvent({
+    //   eventType: 'METADATA_ACCESS',
+    //   status: 'SUCCESS',
+    //   userId: currentUserId,
+    //   details: { action: 'list_users' },
+    //   req
+    // });
 
     res.json(users);
   } catch (error) {

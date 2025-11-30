@@ -2,6 +2,7 @@ import express from 'express';
 import PublicKey from '../models/PublicKey.js';
 import ConversationState from '../models/ConversationState.js';
 import { authenticate } from '../middleware/authMiddleware.js';
+import { logEvent } from '../utils/logger.js';
 
 /**
  * Key Exchange Routes
@@ -25,19 +26,6 @@ const router = express.Router();
  * POST /api/keys/upload
  * 
  * Upload the authenticated user's identity public key
- * 
- * Request body:
- * {
- *   "userId": "user_id",
- *   "publicKeyJwk": "{\"kty\":\"EC\",\"crv\":\"P-256\",...}"
- * }
- * 
- * Authorization: Requires valid JWT token
- * 
- * Security checks:
- * - User must be authenticated
- * - User can only upload their own public key
- * - Key format must be valid JSON
  */
 router.post('/upload', authenticate, async (req, res, next) => {
   try {
@@ -52,6 +40,14 @@ router.post('/upload', authenticate, async (req, res, next) => {
 
     // Authorization: User can only upload their own key
     if (req.user.userId !== userId) {
+      logEvent({
+        eventType: 'KEY_UPLOAD',
+        status: 'FAILURE',
+        userId: req.user.userId,
+        details: { reason: 'Attempted to upload key for another user', targetUserId: userId },
+        req,
+        severity: 'WARNING'
+      });
       return res.status(403).json({
         message: 'You can only upload your own public key'
       });
@@ -102,6 +98,13 @@ router.post('/upload', authenticate, async (req, res, next) => {
 
     console.log(`✓ Public key uploaded for user: ${userId}`);
 
+    logEvent({
+      eventType: 'KEY_UPLOAD',
+      status: 'SUCCESS',
+      userId,
+      req
+    });
+
     res.status(200).json({
       message: 'Public key uploaded successfully',
       publicKeyId: publicKey._id,
@@ -117,24 +120,6 @@ router.post('/upload', authenticate, async (req, res, next) => {
  * GET /api/keys/:userId
  * 
  * Retrieve a user's identity public key
- * 
- * Path parameter:
- * - userId: The ID of the user whose public key to retrieve
- * 
- * Authorization: Requires valid JWT token
- * 
- * Response:
- * {
- *   "userId": "user_id",
- *   "publicKeyJwk": "{\"kty\":\"EC\",...}",
- *   "createdAt": "2025-11-29T...",
- *   "updatedAt": "2025-11-29T..."
- * }
- * 
- * Security notes:
- * - Public keys are safe to share (they're public by design)
- * - Used for signature verification during key exchange
- * - Authenticated users can retrieve any user's public key
  */
 router.get('/:userId', authenticate, async (req, res, next) => {
   try {
@@ -175,8 +160,6 @@ router.get('/:userId', authenticate, async (req, res, next) => {
  * DELETE /api/keys/:userId
  * 
  * Delete a user's public key (optional - for key rotation or account deletion)
- * 
- * Authorization: User can only delete their own key
  */
 router.delete('/:userId', authenticate, async (req, res, next) => {
   try {
@@ -250,6 +233,14 @@ router.post('/exchange/initiate', authenticate, async (req, res, next) => {
     console.log(`✓ Conversation state reset for ${initiatorUserId} <-> ${targetUserId}`);
 
     console.log(`✓ Key exchange initiated: ${initiatorUserId} → ${targetUserId}`);
+
+    logEvent({
+      eventType: 'KEY_EXCHANGE_INITIATE',
+      status: 'SUCCESS',
+      userId: initiatorUserId,
+      details: { targetUserId },
+      req
+    });
 
     res.json({
       message: 'Key exchange data published',

@@ -142,6 +142,22 @@ export const processIncomingMessage = async (msg) => {
 
         if (!isValid) {
             console.warn(`Invalid signature for message ${msg.id} from ${senderId}`);
+
+            // Report failure to server
+            try {
+                await apiClient.post('/logs/client', {
+                    eventType: 'DECRYPTION_FAILURE',
+                    details: {
+                        reason: 'Invalid Signature',
+                        messageId: msg.id,
+                        senderId
+                    },
+                    severity: 'CRITICAL'
+                });
+            } catch (logError) {
+                console.error('Failed to send error log to server:', logError);
+            }
+
             return { ...msg, plaintext: '[Signature Invalid - Potential Tampering]', decrypted: false, verified: false };
         }
 
@@ -194,6 +210,22 @@ export const processIncomingMessage = async (msg) => {
 
     } catch (error) {
         console.error('Error processing message:', error);
+
+        // Report failure to server for auditing
+        try {
+            await apiClient.post('/logs/client', {
+                eventType: 'DECRYPTION_FAILURE',
+                details: {
+                    messageId: msg.id,
+                    senderId: msg.senderId._id || msg.senderId,
+                    error: error.message
+                },
+                severity: 'WARNING'
+            });
+        } catch (logError) {
+            console.error('Failed to send error log to server:', logError);
+        }
+
         return { ...msg, plaintext: '[Processing Error]', decrypted: false };
     }
 };

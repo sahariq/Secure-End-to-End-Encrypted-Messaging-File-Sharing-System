@@ -5,6 +5,7 @@ import ReplayLog from '../models/ReplayLog.js';
 import ConversationState from '../models/ConversationState.js';
 import PublicKey from '../models/PublicKey.js';
 import { verifyObjectSignature } from '../utils/cryptoUtils.js';
+import { logEvent } from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -38,6 +39,14 @@ router.post('/', async (req, res, next) => {
 
     // SECURITY CHECK: Reject if any plaintext field is present
     if (req.body.plaintext || req.body.message || req.body.text) {
+      logEvent({
+        eventType: 'MESSAGE_SEND',
+        status: 'FAILURE',
+        userId: senderId,
+        details: { reason: 'Plaintext message rejected' },
+        req,
+        severity: 'WARNING'
+      });
       return res.status(400).json({
         message: 'Plaintext messages are not accepted. Messages must be encrypted client-side.'
       });
@@ -50,9 +59,25 @@ router.post('/', async (req, res, next) => {
     const fiveMinutes = 5 * 60 * 1000;
 
     if (now - msgTime > fiveMinutes) {
+      logEvent({
+        eventType: 'REPLAY_DETECTED',
+        status: 'FAILURE',
+        userId: senderId,
+        details: { reason: 'Message expired', timestamp, now },
+        req,
+        severity: 'WARNING'
+      });
       return res.status(400).json({ message: 'Message expired (timestamp too old)' });
     }
     if (msgTime - now > 60 * 1000) {
+      logEvent({
+        eventType: 'REPLAY_DETECTED',
+        status: 'FAILURE',
+        userId: senderId,
+        details: { reason: 'Future timestamp', timestamp, now },
+        req,
+        severity: 'WARNING'
+      });
       return res.status(400).json({ message: 'Invalid timestamp (in the future)' });
     }
 
@@ -61,6 +86,14 @@ router.post('/', async (req, res, next) => {
     const existingNonce = await ReplayLog.findOne({ nonce });
     if (existingNonce) {
       console.warn(`⚠️ Replay attack detected! Nonce reused: ${nonce}`);
+      logEvent({
+        eventType: 'REPLAY_DETECTED',
+        status: 'FAILURE',
+        userId: senderId,
+        details: { reason: 'Nonce reused', nonce },
+        req,
+        severity: 'CRITICAL'
+      });
       return res.status(403).json({ message: 'Replay detected: Nonce already used' });
     }
 
@@ -91,6 +124,14 @@ router.post('/', async (req, res, next) => {
 
     if (!isValid) {
       console.warn(`⚠️ Invalid signature from user ${senderId}`);
+      logEvent({
+        eventType: 'SIGNATURE_INVALID',
+        status: 'FAILURE',
+        userId: senderId,
+        details: { reason: 'Signature verification failed', receiverId },
+        req,
+        severity: 'CRITICAL'
+      });
       return res.status(403).json({ message: 'Invalid signature: Message integrity check failed' });
     }
 
@@ -112,6 +153,14 @@ router.post('/', async (req, res, next) => {
 
     if (sequenceNumber <= convState.lastSequenceNumber) {
       console.warn(`⚠️ Replay/Reorder detected! Seq ${sequenceNumber} <= Last ${convState.lastSequenceNumber}`);
+      logEvent({
+        eventType: 'REPLAY_DETECTED',
+        status: 'FAILURE',
+        userId: senderId,
+        details: { reason: 'Sequence number too low', sequenceNumber, lastSequenceNumber: convState.lastSequenceNumber },
+        req,
+        severity: 'WARNING'
+      });
       return res.status(403).json({
         message: `Invalid sequence number. Expected > ${convState.lastSequenceNumber}, got ${sequenceNumber}`
       });
@@ -145,6 +194,14 @@ router.post('/', async (req, res, next) => {
 
     // DO NOT log ciphertext or IV to console (security best practice)
     console.log(`✓ Secure message stored: ${senderId} -> ${receiverId} (Seq: ${sequenceNumber})`);
+
+    logEvent({
+      eventType: 'MESSAGE_SEND',
+      status: 'SUCCESS',
+      userId: senderId,
+      details: { receiverId, sequenceNumber },
+      req
+    });
 
     res.status(201).json({
       message: 'Message stored successfully',

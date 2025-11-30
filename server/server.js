@@ -10,6 +10,7 @@ import authRoutes from './routes/authRoutes.js';
 import messageRoutes from './routes/messageRoutes.js';
 import fileRoutes from './routes/fileRoutes.js';
 import keyRoutes from './routes/keyRoutes.js';
+import logRoutes from './routes/logRoutes.js';
 
 // Load environment variables
 dotenv.config();
@@ -46,6 +47,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api/keys', keyRoutes);
+app.use('/api/logs', logRoutes);
 
 // Health Check Route
 app.get('/api/health', (req, res) => {
