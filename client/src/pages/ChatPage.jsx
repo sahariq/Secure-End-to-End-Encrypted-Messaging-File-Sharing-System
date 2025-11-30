@@ -349,9 +349,9 @@ function ChatPage() {
         if (data && data.timestamp) {
           const exchangeTime = new Date(data.timestamp).getTime();
           const now = Date.now();
-          const twoMinutes = 2 * 60 * 1000;
+          const fiveMinutes = 5 * 60 * 1000;
 
-          if (now - exchangeTime > twoMinutes) {
+          if (now - exchangeTime > fiveMinutes) {
             console.log('⚠️ Found stale exchange data from peer. Ignoring.');
             peerExchangeData = null;
           } else {
@@ -420,7 +420,7 @@ function ChatPage() {
 
         // Poll for response
         let attempts = 0;
-        const maxAttempts = 30;
+        const maxAttempts = 150; // 5 minutes (150 * 2s)
 
         const pollInterval = setInterval(async () => {
           attempts++;
@@ -432,7 +432,7 @@ function ChatPage() {
               if (responseData.timestamp) {
                 const exchangeTime = new Date(responseData.timestamp).getTime();
                 const now = Date.now();
-                if (now - exchangeTime > 2 * 60 * 1000) return;
+                if (now - exchangeTime > 5 * 60 * 1000) return; // 5 minutes
               }
 
               if (responseData.keyConfirmation) {
